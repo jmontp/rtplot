@@ -76,18 +76,24 @@ socket = context.socket(zmq.SUB)
 # since that is the current use case
 if args.pi_ip is not None:
     #Connect to the supplied IP address
-    socket.connect(f"tcp://{args.pi_ip}:500")
+    connect_string = f"tcp://{args.pi_ip}:500"
+    socket.connect(connect_string)
+    print(f'Connected to {connect_string}')
 
 #Elif default to a known address
 elif not fixed_address:
     #Connect to neurobionics pi - default behaviour for now
-    socket.connect("tcp://10.0.0.200:500")
+    connect_string = "tcp://10.0.0.200:500"
+
+    socket.connect(connect_string)
+    print(f'Connected to {connect_string}')
    
 #If we have a fixed address, then the subscriber can reach us
 # good for local plots or fixed ip address
 else:
     #Bind so that you can get more
     socket.bind("tcp://*:5555")
+    print("Bounded every ip address on port :5555")
 
 #Initialize subscriber
 socket.setsockopt_string(zmq.SUBSCRIBE, "")

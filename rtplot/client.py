@@ -26,31 +26,36 @@ bind_address = "tcp://*:5555"
 
 # The subscriber or the publisher must be fixed
 # set which is which here
-fixed_subscriber_prev = False
+known_pi_address_prev = True
 # Add flag to indicate if we ever failed to bind
 failed_bind = False
 
-#Sleep so that the subscriber can join
-time.sleep(0.2)
 
-#We are the publisher, therefore, if the sub is fixed,
-# connect to it
-if fixed_subscriber_prev:
 
-    #Connect to the default address
-    socket.connect(prev_address)
+## Define the default behaviour of the pi
 
-#If the subscriber is variable, then we are fixed
-# bind all incoming connections to the known port
-else:
+# Assume that you know the ip address of the pi
+if known_pi_address_prev:
+    
     try:
+        #Attempt to bind to incoming addresses on the port
         socket.bind(bind_address)
+
+        #Sleep so that the subscriber can join
+        time.sleep(0.2)
     
     #If you cannot connect to the socket, alert user and continue
     except zmq.error.ZMQError as e:
         failed_bind = True
         print("rtplot.client: Could not connect to default address '{}'".format(e))
         print("               Fine if doing local plots")
+   
+
+# Secondary default behavior is that you know the ip address 
+# of the computer that will plot
+else:
+    #Connect to the computer that will plot information
+    socket.connect(prev_address)
 
 ############################
 # PyQTgraph Configuration #
@@ -65,11 +70,11 @@ def local_plot():
     """Send data to a plot in the same computer"""
 
     local_address = "tcp://127.0.0.1:5555"
-    configure_ip(local_address)
+    configure_ip(ip = local_address)
 
     
 
-def configure_ip(ip=None, fixed_subscriber = True):
+def configure_ip(ip=None, known_pi_address = False):
     """Connect to a subscriber at a specific IP address
     
     Inputs
@@ -79,16 +84,18 @@ def configure_ip(ip=None, fixed_subscriber = True):
                       publisher has a fixed ip address
     """
 
-    #Get the current address
+    ## Get the current address
     global prev_address
-    global fixed_subscriber_prev
+    global known_pi_address_prev
     
-    #Disconnect from the previous configuration
-    if fixed_subscriber_prev and not failed_bind:
+    ## Disconnect from the previous configuration
+    if known_pi_address_prev and not failed_bind:
         socket.unbind(bind_address)
     elif prev_address is not None:
         socket.disconnect(prev_address)
     
+    ## Format the incomming string
+
     #If you just get the ip address and no port, format correctly
     num_colons = ip.count(':')
     
@@ -104,17 +111,19 @@ def configure_ip(ip=None, fixed_subscriber = True):
 
     print("rtplot.client: Connecting to address {}".format(connect_address))
 
-    #Connect to new configuration
-    if(fixed_subscriber):
-        socket.connect(connect_address)
-        prev_address = connect_address
-
-    else:
+    ## Connect to new configuration
+    if(known_pi_address):
+        #Bind incomming computers to the pi
         socket.bind(bind_address)
         prev_address = None
 
-    #Remember the last conection you had
-    fixed_subscriber_prev = fixed_subscriber
+    else:
+        #Connect to the computer that will do the plotting
+        socket.connect(connect_address)
+        prev_address = connect_address
+
+    #Remember the last configuration you had
+    known_pi_address_prev = known_pi_address
 
     #Sleep so that the connection can be established
     time.sleep(1)
