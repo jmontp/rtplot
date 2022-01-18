@@ -1,12 +1,5 @@
-#
-#   Hello World client in Python
-#   Connects REQ socket to tcp://localhost:5555
-#   Sends "Hello" to server, expects "World" back
-#
-
 import zmq
 import numpy as np
-import json 
 import time
 from collections import OrderedDict
 
