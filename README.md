@@ -8,6 +8,14 @@ The main highlight in this plotter are the following:
 * **Fast Performance**. Can do 500+ fps on one trace using an i7-9750H processor
 * **Remote Plot Customizability**. The plot configuration is defined by the provider of the data. E.g. if you are using a pi to collect data, the plot configuration is also stored on the pi so you only have to change code in one location 
 
+
+# Install 
+
+Run in the parent folder containing the repo
+
+> python3 -m pip install -e rtplot/
+
+
 # Dependencies
 [PyZMQ](https://zeromq.org/languages/python/)
 
