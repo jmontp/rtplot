@@ -27,11 +27,14 @@ import datetime
 parser = argparse.ArgumentParser()
 
 #Add argument to enable bigger fonts
+parser.add_argument('-p','--pi_ip', help="The IP address for the pi, if you don't add this it will default to 10.0.0.200", 
+                    action='store', type=str)
+
 parser.add_argument("-b","--bigscreen", help="Increase fonts to print in the big screen",
                     action="store_true")
 parser.add_argument('-l','--local', help="Run local plotting server", 
                     action="store_true")
-parser.add_argument('-s','--static_ip', help="Run server expecting that server has static ip", 
+parser.add_argument('-s','--static_ip', help="Use this to connec the pi to your computer when it has a konwn fixed IP", 
                     action="store_true")
 parser.add_argument('-c','--column', help="Create new plots in separate columns",
                     action="store_false")
@@ -71,7 +74,12 @@ socket = context.socket(zmq.SUB)
 
 #Current default is to connect to the neurobionics pi hotspot
 # since that is the current use case
-if not fixed_address:
+if args.pi_ip is not None:
+    #Connect to the supplied IP address
+    socket.connect(f"tcp://{args.pi_ip}:500")
+
+#Elif default to a known address
+elif not fixed_address:
     #Connect to neurobionics pi - default behaviour for now
     socket.connect("tcp://10.0.0.200:500")
    
