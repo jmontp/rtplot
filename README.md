@@ -19,7 +19,13 @@ Run in the parent folder containing the repo
 # Dependencies
 [PyZMQ](https://zeromq.org/languages/python/)
 
+```pip3 install pyzmq```
+
 [pyqtgraph](https://pyqtgraph.readthedocs.io/en/latest/installation.html)
+
+```pip3 install pyqtgraph ```
+
+```pip3 install pyside6```
 
 # How to use
 
