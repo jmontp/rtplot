@@ -140,9 +140,9 @@ def send_array(A, flags=0, copy=True, track=False):
               This is not fixed 
     """
     #If you get a float value, convert it to a numpy array
-    if(isinstance(A,float)):
-        A = np.array(A).reshape(1,1)
-    
+    if(isinstance(A,float) or isinstance(A,list)):
+        A = np.array(A).reshape(-1,1)
+
     #If array is one dimensional, reshape to two dimensions
     if(len(A.shape) ==1):
         A = A.reshape(-1,1)
