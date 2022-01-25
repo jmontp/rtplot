@@ -3,15 +3,20 @@ import numpy as np
 import time
 
 
+#The first section is dedicated to configuring IP
+# You do NOT need to do this if the server.py is connecting to the pi
+# Uncomment "client.local_plot()" if you want to plot locally 
+
 #--------------------------------------------------------------------------------------------------
-
 #Change the ip address that you are going to send data to
-
-#In this example, we assume that the computer will connect to the pi,
-# in case you want the pi to connect to the computer, change the line below
+# In this example we configure it to plot locally (127.0.0.1 is the address of the local host)
+# client.configure_ip("127.0.0.1")
 
 #Can also specify port, default is 5555
 # client.configure_ip("127.0.0.1:5555")
+
+#If you want to plot locally, there is already a function that is equivalent to the above
+# client.local_plot()
 #--------------------------------------------------------------------------------------------------
 
 
@@ -138,6 +143,9 @@ for i in range(1000):
     client.send_array(data)
 #--------------------------------------------------------------------------------------------------
 
+
+
+time.sleep(2)
 
 
 
