@@ -22,6 +22,9 @@ subplots = data.values[-1,:-1]
 num_subplots = int(np.max(subplots))+1
 fig,axs = plt.subplots(num_subplots,1)
 
+if isinstance(axs, list) != True:
+	axs = [axs]
+
 time = data['Time(s)'][:-1]
 
 #Get the trace names from the columns
