@@ -21,11 +21,25 @@ Run in the parent folder containing the repo
 
 ```pip3 install pyzmq```
 
+
+
+On the server side only
 [pyqtgraph](https://pyqtgraph.readthedocs.io/en/latest/installation.html)
 
 ```pip3 install pyqtgraph ```
 
 ```pip3 install pyside6```
+
+To save plots
+
+[Pandas][https://pandas.pydata.org/docs/getting_started/install.html]
+
+```pip3 install pandas```
+
+[Pyarrow][https://arrow.apache.org/docs/python/install.html]
+
+```pip3 install pyarrow```
+
 
 # How to use
 
