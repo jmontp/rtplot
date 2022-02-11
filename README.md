@@ -1,4 +1,4 @@
-![Logo of the project](https://github.com/jmontp/prosthetic_adaptation/blob/master/.images/signature-stationery.png)
+![Logo of the project](https://github.com/jmontp/rtplot/blob/master/.images/signature-stationery.png)
 
 # Real Time Plotting with pyqtgraph and ZMQ
 
@@ -223,9 +223,9 @@ To get the most performance out of the system, you want to set the 'yrange' conf
 
 [simplest_test.py](https://github.com/jmontp/prosthetic_adaptation/blob/master/rtplot/simplest_test.py) Contains many great examples on how to setup the client-side code. 
 
-![alt text](https://github.com/jmontp/prosthetic_adaptation/blob/master/.images/rtplot_example2.png "Example 1")
+![alt text](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example1.png "Example 1")
 
-![alt text](https://github.com/jmontp/prosthetic_adaptation/blob/master/.images/rtplot_example1.png "Example 2")
+![alt text](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example2.png "Example 2")
 
 simulate_ekf.py contains example code. Look for calls to client. 
 
