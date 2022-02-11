@@ -32,11 +32,11 @@ On the server side only
 
 To save plots
 
-[Pandas][https://pandas.pydata.org/docs/getting_started/install.html]
+[Pandas](https://pandas.pydata.org/docs/getting_started/install.html)
 
 ```pip3 install pandas```
 
-[Pyarrow][https://arrow.apache.org/docs/python/install.html]
+[Pyarrow](https://arrow.apache.org/docs/python/install.html)
 
 ```pip3 install pyarrow```
 
