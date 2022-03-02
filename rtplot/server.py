@@ -8,6 +8,7 @@ import pyqtgraph as pg
 # Common imports 
 import numpy as np
 import pandas as pd 
+import os
 
 # Get timer to calculate fps
 from time import perf_counter
@@ -155,7 +156,7 @@ def save_current_plot():
 
     #Set the plot name as the current time
     plot_name = datetime.datetime.now()
-    total_name = (PLOT_SAVE_PATH + str(plot_name)).replace(' ','_') + '.parquet'
+    total_name = os.path.join(PLOT_SAVE_PATH, str(plot_name).replace(' ','_')+'.parquet')
     
     #Create the dataframe object so that we can add ifnro about the subplot names
     df = pd.DataFrame(local_storage_buffer[:local_storage_buffer_num_trace,NUM_DATAPOINTS_IN_PLOT:li+1].T,
