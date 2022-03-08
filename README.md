@@ -141,6 +141,8 @@ To get the most performance out of the system, you want to set the 'yrange' conf
 
 # [Example Code](https://github.com/jmontp/rtplot/blob/master/rtplot/example_code.py)
 
+
+# Example Image
 ![alt text](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example1.png "Example 1")
 
 ![alt text](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example2.png "Example 2")
