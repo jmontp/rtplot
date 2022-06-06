@@ -9,6 +9,7 @@ import pyqtgraph as pg
 import numpy as np
 import pandas as pd 
 import os
+import time
 
 # Get timer to calculate fps
 from time import perf_counter
@@ -30,7 +31,6 @@ parser = argparse.ArgumentParser()
 #Add argument to enable bigger fonts
 parser.add_argument('-p','--pi_ip', help="The IP address for the pi, if you don't add this it will default to 10.0.0.200", 
                     action='store', type=str)
-
 parser.add_argument("-b","--bigscreen", help="Increase fonts to print in the big screen",
                     action="store_true")
 parser.add_argument('-l','--local', help="Run local plotting server", 
@@ -39,6 +39,7 @@ parser.add_argument('-s','--static_ip', help="Use this to connec the pi to your 
                     action="store_true")
 parser.add_argument('-c','--column', help="Create new plots in separate columns",
                     action="store_false")
+parser.add_argument("-d","--debug", help="Add debug text output",action="store_true")
 args = parser.parse_args()
 
 # If big screen mode is on, set font sizes big
@@ -62,6 +63,9 @@ fixed_address = args.local or args.static_ip
 # Define if a new subplot is placed in a 
 # new row or columns
 NEW_SUBPLOT_IN_ROW = args.column
+
+#Define if debug text output is set on
+DEBUG_TEXT_ENABLED = args.debug
 
 ###################
 # ZMQ Networking #
@@ -363,10 +367,19 @@ def rec_type():
             received = socket.recv_string(flags=zmq.NOBLOCK)
 
             return int(received)
+        #If you get a value error, then you got data
         except ValueError:
-            print(f"Had a value error. Expected int, received: {received}")
+            if DEBUG_TEXT_ENABLED:
+                print(f"Had a value error. Expected int, received: {received}")
+            else:
+                print("Lost synchronization between client and server. Please restart client")
         
+        #There is no data currently available
         except zmq.Again as e:
+            if DEBUG_TEXT_ENABLED:
+                print("ZMQ.Again: No data received")
+            
+            time.sleep(1)
             return NOT_RECEIVED_DATA
 
 
