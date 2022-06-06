@@ -157,7 +157,7 @@ def send_array(A, flags=0, copy=True, track=False):
     socket.send_string(SENDING_DATA)
     
     #Send json description
-    socket.send_json(md, flags|zmq.SNDMORE)
+    socket.send_json(md, flags | zmq.SNDMORE)
     #Send array
     return socket.send(A, flags, copy=copy, track=track)
 
@@ -213,51 +213,3 @@ def initialize_plots(plot_descriptions=1):
 
     #Send the description
     socket.send_json(plot_desc_dict)
-
-
-#This is used as a unit test case
-def main():
-
-    local_plot()
-
-    #  Do 10 requests, waiting each time for a response
-    #Configure the plot
-    plot1_names = ['phase', 'phase_dot', 'stride_length']
-    plot2_names = [f"gf{i+1}" for i in range(5)]
-
-
-
-    plot_1_config = {'names': ['phase', 'phase_dot', 'stride_length'],
-                    'title': "Phase, Phase Dot, Stride Length",
-                    'ylabel': "reading (unitless)",
-                    'xlabel': 'test 1',
-                    'yrange': [-2,2], 
-                    'line_width': [5,5,5]}
-
-    plot_2_config = {'names': [f"gf{i+1}" for i in range(4)],
-                    'colors' : ['b' for i in range(24)],
-                    'line_style' : ['-','','-','','-']*24,
-                    'title': "Phase, Phase Dot, Stride Length",
-                    'ylabel': "reading (unitless)",
-                    'xlabel': 'test 2',
-                    'line_width':[5]*24,
-                    'yrange': [-2,2]}
-
-    total_plots = len(plot_1_config['names']) + len(plot_2_config['names'])
-    # total_plots = 1
-
-    initialize_plots([plot_1_config,plot_2_config])
-    # initialize_plots([['phase']])
-    print("Sent Plot format")
-    time.sleep(1)
-
-    for request in range(1000):
-
-        print("Sending request %s" % request)
-        
-        send_array(np.sin(50*np.arange(total_plots)*time.time()).reshape(-1,1))
-
-
-
-if __name__ == '__main__':
-    main()
