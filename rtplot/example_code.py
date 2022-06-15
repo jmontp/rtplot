@@ -16,7 +16,7 @@ import time
 # client.configure_ip("127.0.0.1:5555")
 
 #If you want to plot locally, there is already a function that is equivalent to the above
-# client.local_plot()
+client.local_plot()
 #--------------------------------------------------------------------------------------------------
 
 
