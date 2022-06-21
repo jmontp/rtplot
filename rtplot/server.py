@@ -109,7 +109,8 @@ socket.setsockopt_string(zmq.SUBSCRIBE, "")
 ###############################
 
 # Width of the window displaying the curve
-NUM_DATAPOINTS_IN_PLOT = 200 
+# NUM_DATAPOINTS_IN_PLOT = 200 
+DEFAULT_NUM_DATAPOINTS_IN_PLOT = 200
 
 #Num of entry buffers
 MAX_LOCAL_STORAGE = 10000000
@@ -122,14 +123,10 @@ INITIAL_NUM_TRACES = 50
 local_storage_buffer = np.zeros((INITIAL_NUM_TRACES,MAX_LOCAL_STORAGE))
 
 #Create an index to keep track where we are in the local storage buffer
-li = NUM_DATAPOINTS_IN_PLOT
+li = DEFAULT_NUM_DATAPOINTS_IN_PLOT
 
 #Set how many traces we have 
 local_storage_buffer_num_trace = 1
-
-#To use the local storage buffer as the plotter array
-# we need to keep track of the bounds
-buffer_bounds = np.array([0,NUM_DATAPOINTS_IN_PLOT])
 
 #Configure save path
 PLOT_SAVE_PATH = 'saved_plots/'
@@ -163,7 +160,7 @@ def save_current_plot():
     total_name = os.path.join(PLOT_SAVE_PATH, str(plot_name).replace(' ','_')+'.parquet')
     
     #Create the dataframe object so that we can add ifnro about the subplot names
-    df = pd.DataFrame(local_storage_buffer[:local_storage_buffer_num_trace,NUM_DATAPOINTS_IN_PLOT:li+1].T,
+    df = pd.DataFrame(local_storage_buffer[:local_storage_buffer_num_trace,num_datapoints_in_plot:li+1].T,
                       columns=trace_names)
     df.to_parquet(total_name)
 
@@ -281,8 +278,14 @@ def initialize_plot(json_config, subplots_to_remove=None):
         if 'ylabel' in plot_description:
             new_plot.setLabel('left', plot_description['ylabel'],**axis_label_style)
 
+        #Get the x range information
+        if 'xrange' in plot_description:
+            num_datapoints_in_plot = plot_description['xrange']
+        else:
+            num_datapoints_in_plot = DEFAULT_NUM_DATAPOINTS_IN_PLOT
+
         # Potential performance boost
-        new_plot.setXRange(0,NUM_DATAPOINTS_IN_PLOT)
+        new_plot.setXRange(0,num_datapoints_in_plot)
 
         # Get the y range
         if 'yrange' in plot_description:
@@ -340,7 +343,7 @@ def initialize_plot(json_config, subplots_to_remove=None):
         subplots.append(new_plot)
 
     print("Initialized Plot!")
-    return traces_per_plot, subplots_traces, subplots, top_plot, top_plot_title, trace_info
+    return traces_per_plot, subplots_traces, subplots, top_plot, top_plot_title, trace_info, num_datapoints_in_plot
 
 
 # Receive a numpy array
@@ -410,7 +413,7 @@ while True:
 
         # Initialize plot
         traces_per_plot, subplots_traces, subplots,\
-        top_plot, top_plot_title, trace_info \
+        top_plot, top_plot_title, trace_info, num_datapoints_in_plot \
                 = initialize_plot(plot_configuration, subplots)
         
         # Get the number of plots
@@ -422,8 +425,8 @@ while True:
         #Setup local data buffer
         # Since we save using the index, we just need to update 
         # the index and not set the buffer to zero
-        li = NUM_DATAPOINTS_IN_PLOT
-        buffer_bounds = np.array([0,NUM_DATAPOINTS_IN_PLOT])
+        li = num_datapoints_in_plot
+        buffer_bounds = np.array([0,num_datapoints_in_plot])
         local_storage_buffer_num_trace = num_traces + 1
         local_storage_buffer[:local_storage_buffer_num_trace,:li] = 0
 
