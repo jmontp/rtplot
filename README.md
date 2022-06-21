@@ -78,6 +78,8 @@ You can control the following things when calling ```client.initialize_plots()``
 * 'xlabel' - Sets the x label of the plot
 * 'yrange' - Sets the range of values of y. This provides a performance boost to the plotter
    * Expects values as a iterable in the order [min, max]. Example: [-2,2]
+* 'xrange' - Sets the number of datapoints that will be in the real time plotter at a given time.
+   * Expects values as a integer that describes how many datapoints are in the subplot. Default is 200 datapoints
 
 
 You only need to specify the things that you want, if the dictionary element is left out then the default value is used. 
