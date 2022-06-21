@@ -159,6 +159,9 @@ def save_current_plot():
     plot_name = datetime.datetime.now()
     total_name = os.path.join(PLOT_SAVE_PATH, str(plot_name).replace(' ','_')+'.parquet')
     
+    #Remove colons from timestamp for windows file name compatibility
+    total_name = total_name.replace(":","-")
+
     #Create the dataframe object so that we can add ifnro about the subplot names
     df = pd.DataFrame(local_storage_buffer[:local_storage_buffer_num_trace,num_datapoints_in_plot:li+1].T,
                       columns=trace_names)

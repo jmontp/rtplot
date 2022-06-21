@@ -132,6 +132,35 @@ plot_data_array = [np.random.randn(), #phase
 client.send_array(plot_data_array)
  ```
  
+# Additional networking configurations
+
+There are two main ways that you can connect to transmit information. Either the computer that runs the server knows what IP the client is (server connects to client), or the client knows which IP the server has (server connects to client). For either option, follow the steps bellow:
+
+### Server connects to client
+This is accomplished by running the server with the IP address of the pi as an argument.
+
+```
+python3 server.py -p xxx.xxx.xxx.xxx
+```
+
+Where xxx.xxx.xxx.xxx is the IP address of the pi. No additional configuration is needed on the client side.
+
+
+### Client connects to server
+This is done by setting up the server with the static ip flag.
+
+```
+python3 server.py -s
+```
+
+The client then needs to specify the ip of the plotter by running:
+```
+client.configure_ip("xxx.xxx.xxx.xxx")
+```
+
+Where xxx.xxx.xxx.xxx is the IP address of the server.
+
+ 
 # Plotter too slow?
 
 The performance of the plotter is mostly impacted by the amount of traces that you want to plot (this is due to multiple calls to the line drawing algorithms in pyqtgraph). However, sending over multiple datapoints to plot at once is not expensive since there is essentially only the added overhead of receiving the data (the plotter redraws the entire line anyways). Therefore to get the most performance you should have as little traces as possible and send over as much datapoints at once before the plot updates look ugly.
