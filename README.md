@@ -25,6 +25,8 @@ Run in the parent folder containing the repo
 | [Pandas](https://pandas.pydata.org/docs/getting_started/install.html) ```pip3 install pandas```      |       |
 | [Pyarrow](https://arrow.apache.org/docs/python/install.html) ```pip3 install pyarrow``` |      |
 
+One-liner to install everything:
+```pip3 install pyarrow pyqtgraph pyside6 pyzmq pandas```
 
 # How to use
 
