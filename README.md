@@ -180,12 +180,3 @@ To get the most performance out of the system, you want to set the 'yrange' conf
 ![alt text](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example1.png "Example 1")
 
 ![alt text](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example2.png "Example 2")
-
-
-
-# Todo
-
-* Rename 'server' and 'client' to 'subscriber' and 'publisher' to better indicate the communication pattern. 
-* Make the x-axis represent time.
-* Have a way to store entire datasets directly from the plotter (e.g. button of some sort).
-* Add performance vs number of traces and array size surface. Include performance by varying yrange and other terms.
