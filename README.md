@@ -25,6 +25,8 @@ Run in the parent folder containing the repo
 | [Pandas](https://pandas.pydata.org/docs/getting_started/install.html) ```pip3 install pandas```      |       |
 | [Pyarrow](https://arrow.apache.org/docs/python/install.html) ```pip3 install pyarrow``` |      |
 
+One-liner to install everything:
+```pip3 install pyarrow pyqtgraph pyside6 pyzmq pandas```
 
 # How to use
 
@@ -78,6 +80,8 @@ You can control the following things when calling ```client.initialize_plots()``
 * 'xlabel' - Sets the x label of the plot
 * 'yrange' - Sets the range of values of y. This provides a performance boost to the plotter
    * Expects values as a iterable in the order [min, max]. Example: [-2,2]
+* 'xrange' - Sets the number of datapoints that will be in the real time plotter at a given time.
+   * Expects values as a integer that describes how many datapoints are in the subplot. Default is 200 datapoints
 
 
 You only need to specify the things that you want, if the dictionary element is left out then the default value is used. 
@@ -176,12 +180,3 @@ To get the most performance out of the system, you want to set the 'yrange' conf
 ![alt text](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example1.png "Example 1")
 
 ![alt text](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example2.png "Example 2")
-
-
-
-# Todo
-
-* Rename 'server' and 'client' to 'subscriber' and 'publisher' to better indicate the communication pattern. 
-* Make the x-axis represent time.
-* Have a way to store entire datasets directly from the plotter (e.g. button of some sort).
-* Add performance vs number of traces and array size surface. Include performance by varying yrange and other terms.
