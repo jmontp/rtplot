@@ -72,6 +72,11 @@ def local_plot():
     local_address = "tcp://127.0.0.1:5555"
     configure_ip(ip = local_address)
 
+def plot_to_neurobionics_tv():
+    """Send data to a plot in the same computer"""
+
+    tv_computer_address = "tcp://141.212.77.109:5555"
+    configure_ip(ip = tv_computer_address)
     
 
 def configure_ip(ip=None, known_pi_address = False):
@@ -89,10 +94,10 @@ def configure_ip(ip=None, known_pi_address = False):
     global known_pi_address_prev
     
     ## Disconnect from the previous configuration
-    if known_pi_address_prev and not failed_bind:
-        socket.unbind(bind_address)
-    elif prev_address is not None:
-        socket.disconnect(prev_address)
+    # if known_pi_address_prev and not failed_bind:
+    #     socket.unbind(bind_address)
+    # elif prev_address is not None:
+    #     socket.disconnect(prev_address)
     
     ## Format the incomming string
 
