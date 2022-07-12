@@ -364,8 +364,22 @@ RECEIVED_PLOT_UPDATE = 0
 RECEIVED_DATA = 1
 NOT_RECEIVED_DATA = 2
 
+#Variable to store initial time when data was missed
+time_when_data_was_missed = None
+
+#This indicates how long should we wait to sleep the cpu after a datapoint
+# was missed and no new data arrives
+SLEEP_AFTER_X_SECONDS = 10
+
+#This indicates how long to sleep after many datapoints have been missed
+SLEEP_X_SECONDS = 3
+
 # Define function to detect category
 def rec_type():
+    
+    #Keep track of the missed datapoints
+    global time_when_data_was_missed
+
     # Sometimes we get miss-aligned data
     # In this case just ignore the data and wait until you have a valid type
     while True:
@@ -375,17 +389,33 @@ def rec_type():
             return int(received)
         #If you get a value error, then you got data
         except ValueError:
+
             if DEBUG_TEXT_ENABLED:
                 print(f"Had a value error. Expected int, received: {received}")
             else:
-                print("Lost synchronization between client and server. Please restart client")
+                print(("Lost synchronization between client and server."
+                       " Please restart client"))
         
         #There is no data currently available
         except zmq.Again as e:
-            if DEBUG_TEXT_ENABLED:
-                print("ZMQ.Again: No data received")
+
+            # if DEBUG_TEXT_ENABLED:
+            #     print("ZMQ.Again: No data received")
             
-            time.sleep(1)
+            time_now = time.time()
+
+            #If its the first time, set original time to now
+            if (time_when_data_was_missed is None):
+                time_when_data_was_missed = time_now
+
+            #Sleep for one second if enough time has passed to save cpu time
+            if(time_now - time_when_data_was_missed > SLEEP_AFTER_X_SECONDS):
+                time_when_data_was_missed = None
+                time.sleep(SLEEP_X_SECONDS)
+
+                if DEBUG_TEXT_ENABLED:
+                    print("Sleeping from no data")
+            
             return NOT_RECEIVED_DATA
 
 
