@@ -29,18 +29,74 @@ import datetime
 parser = argparse.ArgumentParser()
 
 #Add argument to enable bigger fonts
-parser.add_argument('-p','--pi_ip', help="The IP address for the pi, if you don't add this it will default to 10.0.0.200", 
+parser.add_argument('-p','--pi_ip',
+                    help=("The IP address for the pi, if you don't add"
+                    " this it will default to 10.0.0.200"),
                     action='store', type=str)
-parser.add_argument("-b","--bigscreen", help="Increase fonts to print in the big screen",
+parser.add_argument("-b","--bigscreen",
+                    help="Increase fonts to print in the big screen",
                     action="store_true")
-parser.add_argument('-l','--local', help="Run local plotting server", 
+parser.add_argument('-l','--local',
+                    help="Run local plotting server",
                     action="store_true")
-parser.add_argument('-s','--static_ip', help="Use this to connec the pi to your computer when it has a konwn fixed IP", 
+parser.add_argument('-s','--static_ip',
+                    help=("Use this to connec the pi to your computer"
+                          "when it has a konwn fixed IP"),
                     action="store_true")
-parser.add_argument('-c','--column', help="Create new plots in separate columns",
+parser.add_argument('-c','--column',
+                    help="Create new plots in separate columns",
                     action="store_false")
-parser.add_argument("-d","--debug", help="Add debug text output",action="store_true")
+parser.add_argument("-d","--debug",
+                    help="Add debug text output",
+                    action="store_true")
+parser.add_argument('-t',"--plot_config",
+                    help="Print configuration of items of",
+                    action="store_true")
+
+
+#Read in the arguments
 args = parser.parse_args()
+
+if args.plot_config is True:
+    help_text = \
+        ("You can control the following things when calling"
+        " client.initialize_plots() by passing in a dictionary:"
+        "\n\r"
+        "\n\r'names' - This defines the names of the traces."
+        "The plot will have as many traces as names."
+        "\n\r"
+        "\n\r'colors' - Defines the colors for each trace. Follow"
+        " documentation on how to specify color. Should have at least the same"
+        " length as the number of traces."
+        "\n\r"
+        "\n\r'line_style' - Defines wheter or not a trace is dashed or not."
+        "\n\r\t'-' - represents dashed line"
+        "\n\r\t'' - emptry string (or any other string) represents a"
+        "normal line"
+        "\n\r"
+        "\n\r'title' - Sets the title to the plot"
+        "\n\r"
+        "\n\r'ylabel' - Sets the y label of the plot"
+        "\n\r"
+        "\n\r'xlabel' - Sets the x label of the plot"
+        "\n\r"
+        "\n\r'yrange' - Sets the range of values of y."
+        " This provides a performance boost to the plotter"
+        "\n\r\tExpects values as a iterable in the order [min, max]."
+        " Example: [-2,2]"
+        "\n\r"
+        "\n\r'xrange' - Sets the number of datapoints that will be"
+        " in the real time plotter at a given time. Expects values as a"
+        " integer that describes how many datapoints are in the subplot."
+        " Default is 200 datapoints"
+        "\n\r"
+        "\n\rYou only need to specify the things that you want, if the"
+        " dictionary element is left out then the default value is used."
+        "\n\r"
+        )
+
+    print(help_text)
+    exit()
 
 # If big screen mode is on, set font sizes big
 if args.bigscreen:
@@ -138,6 +194,7 @@ trace_info = None
 
 #Create button callback method
 def save_current_plot():
+    "Save the plot locally"
 
     #Set which trace goes in which plot on the last element of the column
     num_subplots = 0
@@ -157,13 +214,16 @@ def save_current_plot():
 
     #Set the plot name as the current time
     plot_name = datetime.datetime.now()
-    total_name = os.path.join(PLOT_SAVE_PATH, str(plot_name).replace(' ','_')+'.parquet')
+    total_name = os.path.join(PLOT_SAVE_PATH, str(plot_name)\
+        .replace(' ','_')+'.parquet')
     
     #Remove colons from timestamp for windows file name compatibility
     total_name = total_name.replace(":","-")
 
-    #Create the dataframe object so that we can add ifnro about the subplot names
-    df = pd.DataFrame(local_storage_buffer[:local_storage_buffer_num_trace,num_datapoints_in_plot:li+1].T,
+    #Create the dataframe object so that we can add ifnro about the subplot
+    #  names
+    df = pd.DataFrame(local_storage_buffer[:local_storage_buffer_num_trace,
+                                           num_datapoints_in_plot:li+1].T,
                       columns=trace_names)
     df.to_parquet(total_name)
 
@@ -215,13 +275,15 @@ def initialize_plot(json_config, subplots_to_remove=None):
     ------
 
     json_config: Python dictionary with relevant plot configuration
-    subplots_to_remove: Previous plot subplot items that will be removed from the window
+    subplots_to_remove: Previous plot subplot items that will be removed
+                        from the window
 
     Returns
     -------
     traces_per_plot: num of traces per each subplot
     subplots_traces: Object that is used to update the traces
-    subplots: Handle to subplots used to delete the subplots uppon re-initialization
+    subplots: Handle to subplots used to delete the subplots uppon
+              re-initialization
     num_plots: Number of subplots
     top_plot: Reference to top plot object to update title of
     top_plot_title: Reference to top plot title string to add on FPS
@@ -234,7 +296,8 @@ def initialize_plot(json_config, subplots_to_remove=None):
         for subplot in subplots_to_remove:
             win.removeItem(subplot)
 
-    # Initialize arrays of number per plot and array of pointer to plots and traces
+    # Initialize arrays of number per plot and array of pointer to
+    # plots and traces
     traces_per_plot = []
     subplots_traces = []
     subplots = []
@@ -276,10 +339,12 @@ def initialize_plot(json_config, subplots_to_remove=None):
 
         # Add the axis info
         if 'xlabel' in plot_description:
-            new_plot.setLabel('bottom', plot_description['xlabel'],**axis_label_style)
+            new_plot.setLabel('bottom', plot_description['xlabel'],
+                              **axis_label_style)
 
         if 'ylabel' in plot_description:
-            new_plot.setLabel('left', plot_description['ylabel'],**axis_label_style)
+            new_plot.setLabel('left', plot_description['ylabel'],
+                              **axis_label_style)
 
         #Get the x range information
         if 'xrange' in plot_description:
@@ -324,7 +389,10 @@ def initialize_plot(json_config, subplots_to_remove=None):
 
         line_style = [QtCore.Qt.SolidLine] * num_traces
         if 'line_style' in plot_description:
-            line_style = [QtCore.Qt.DashLine if desc == '-' else QtCore.Qt.SolidLine for desc in plot_description['line_style']]
+            line_style = [QtCore.Qt.DashLine if desc == '-'
+                          else QtCore.Qt.SolidLine
+                          for desc
+                          in plot_description['line_style']]
 
         line_width = [1] * num_traces
         if 'line_width' in plot_description:
@@ -333,7 +401,8 @@ def initialize_plot(json_config, subplots_to_remove=None):
         # Generate all the trace objects
         for i in range(num_traces):
             # Create the pen object that defines the trace style
-            pen = pg.mkPen(color = colors[i], style=line_style[i], width=line_width[i])
+            pen = pg.mkPen(color = colors[i], style=line_style[i],
+                           width=line_width[i])
             # Add new curve
             new_curve = pg.PlotCurveItem(name=trace_names[i], pen=pen)
             new_plot.addItem(new_curve)
@@ -346,7 +415,8 @@ def initialize_plot(json_config, subplots_to_remove=None):
         subplots.append(new_plot)
 
     print("Initialized Plot!")
-    return traces_per_plot, subplots_traces, subplots, top_plot, top_plot_title, trace_info, num_datapoints_in_plot
+    return traces_per_plot, subplots_traces, subplots, top_plot,\
+        top_plot_title, trace_info, num_datapoints_in_plot
 
 
 # Receive a numpy array
