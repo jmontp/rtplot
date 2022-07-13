@@ -5,9 +5,9 @@ import zmq
 from pyqtgraph.Qt import QtGui, QtCore
 import pyqtgraph as pg
 
-# Common imports 
+# Common imports
 import numpy as np
-import pandas as pd 
+import pandas as pd
 import os
 import time
 
@@ -18,7 +18,7 @@ from time import perf_counter
 # of the plotter
 import argparse
 
-#Import date_time to save timestamps
+# Import date_time to save timestamps
 import datetime
 
 ############################
@@ -28,38 +28,58 @@ import datetime
 # Create command line arguments
 parser = argparse.ArgumentParser()
 
-#Add argument to enable bigger fonts
-parser.add_argument('-p','--pi_ip',
-                    help=("The IP address for the pi, if you don't add"
-                    " this it will default to 10.0.0.200"),
-                    action='store', type=str)
-parser.add_argument("-b","--bigscreen",
-                    help="Increase fonts to print in the big screen",
-                    action="store_true")
-parser.add_argument('-l','--local',
-                    help="Run local plotting server",
-                    action="store_true")
-parser.add_argument('-s','--static_ip',
-                    help=("Use this to connec the pi to your computer"
-                          "when it has a konwn fixed IP"),
-                    action="store_true")
-parser.add_argument('-c','--column',
-                    help="Create new plots in separate columns",
-                    action="store_false")
-parser.add_argument("-d","--debug",
-                    help="Add debug text output",
-                    action="store_true")
-parser.add_argument('-t',"--plot_config",
-                    help="Print configuration of items of",
-                    action="store_true")
+# Add argument to enable bigger fonts
+parser.add_argument(
+    "-p",
+    "--pi_ip",
+    help=(
+        "The IP address for the pi, if you don't add"
+        " this it will default to 10.0.0.200"
+    ),
+    action="store",
+    type=str,
+)
+parser.add_argument(
+    "-b",
+    "--bigscreen",
+    help="Increase fonts to print in the big screen",
+    action="store_true",
+)
+parser.add_argument(
+    "-l", "--local", help="Run local plotting server", action="store_true"
+)
+parser.add_argument(
+    "-s",
+    "--static_ip",
+    help=(
+        "Use this to connec the pi to your computer"
+        "when it has a konwn fixed IP"
+    ),
+    action="store_true",
+)
+parser.add_argument(
+    "-c",
+    "--column",
+    help="Create new plots in separate columns",
+    action="store_false",
+)
+parser.add_argument(
+    "-d", "--debug", help="Add debug text output", action="store_true"
+)
+parser.add_argument(
+    "-t",
+    "--plot_config",
+    help="Print configuration of items of",
+    action="store_true",
+)
 
 
-#Read in the arguments
+# Read in the arguments
 args = parser.parse_args()
 
 if args.plot_config is True:
-    help_text = \
-        ("You can control the following things when calling"
+    help_text = (
+        "You can control the following things when calling"
         " client.initialize_plots() by passing in a dictionary:"
         "\n\r"
         "\n\r'names' - This defines the names of the traces."
@@ -93,34 +113,34 @@ if args.plot_config is True:
         "\n\rYou only need to specify the things that you want, if the"
         " dictionary element is left out then the default value is used."
         "\n\r"
-        )
+    )
 
     print(help_text)
     exit()
 
 # If big screen mode is on, set font sizes big
 if args.bigscreen:
-    axis_label_style = {'font-size':'20pt'}
-    title_style = {'size':'25pt'}
-    #Accepts parameters into LegendItem constructor
-    legend_style = {'labelTextSize':'14pt'}
+    axis_label_style = {"font-size": "20pt"}
+    title_style = {"size": "25pt"}
+    # Accepts parameters into LegendItem constructor
+    legend_style = {"labelTextSize": "14pt"}
     tick_size = 25
-    
+
 # Else set to normal size
 else:
-    axis_label_style = {'font-size':'10pt'}
-    title_style = {'size':'14pt'}
-    legend_style = {'labelTextSize':'8pt'}
+    axis_label_style = {"font-size": "10pt"}
+    title_style = {"size": "14pt"}
+    legend_style = {"labelTextSize": "8pt"}
     tick_size = 12
 
-#Get flag for local plotting
+# Get flag for local plotting
 fixed_address = args.local or args.static_ip
 
-# Define if a new subplot is placed in a 
+# Define if a new subplot is placed in a
 # new row or columns
 NEW_SUBPLOT_IN_ROW = args.column
 
-#Define if debug text output is set on
+# Define if debug text output is set on
 DEBUG_TEXT_ENABLED = args.debug
 
 ###################
@@ -133,30 +153,30 @@ context = zmq.Context()
 # Using the pub - sub paradigm
 socket = context.socket(zmq.SUB)
 
-#Current default is to connect to the neurobionics pi hotspot
+# Current default is to connect to the neurobionics pi hotspot
 # since that is the current use case
 if args.pi_ip is not None:
-    #Connect to the supplied IP address
+    # Connect to the supplied IP address
     connect_string = f"tcp://{args.pi_ip}:5555"
     socket.connect(connect_string)
-    print(f'Connected to {connect_string}')
+    print(f"Connected to {connect_string}")
 
-#Elif default to a known address
+# Elif default to a known address
 elif not fixed_address:
-    #Connect to neurobionics pi - default behaviour for now
+    # Connect to neurobionics pi - default behaviour for now
     connect_string = "tcp://10.0.0.200:5555"
 
     socket.connect(connect_string)
-    print(f'Connected to {connect_string}')
-   
-#If we have a fixed address, then the subscriber can reach us
+    print(f"Connected to {connect_string}")
+
+# If we have a fixed address, then the subscriber can reach us
 # good for local plots or fixed ip address
 else:
-    #Bind so that you can get more
+    # Bind so that you can get more
     socket.bind("tcp://*:5555")
     print("Bounded every ip address on port :5555")
 
-#Initialize subscriber
+# Initialize subscriber
 socket.setsockopt_string(zmq.SUBSCRIBE, "")
 
 
@@ -165,69 +185,73 @@ socket.setsockopt_string(zmq.SUBSCRIBE, "")
 ###############################
 
 # Width of the window displaying the curve
-# NUM_DATAPOINTS_IN_PLOT = 200 
+# NUM_DATAPOINTS_IN_PLOT = 200
 DEFAULT_NUM_DATAPOINTS_IN_PLOT = 200
 
-#Num of entry buffers
+# Num of entry buffers
 MAX_LOCAL_STORAGE = 10000000
 
-#Initial number of traces
+# Initial number of traces
 INITIAL_NUM_TRACES = 50
 
-#Storage buffer - This will take around 3.73 GB of ram
+# Storage buffer - This will take around 3.73 GB of ram
 # Should last for 27 hours running at 100 Hz
-local_storage_buffer = np.zeros((INITIAL_NUM_TRACES,MAX_LOCAL_STORAGE))
+local_storage_buffer = np.zeros((INITIAL_NUM_TRACES, MAX_LOCAL_STORAGE))
 
-#Create an index to keep track where we are in the local storage buffer
+# Create an index to keep track where we are in the local storage buffer
 li = DEFAULT_NUM_DATAPOINTS_IN_PLOT
 
-#Set how many traces we have 
+# Set how many traces we have
 local_storage_buffer_num_trace = 1
 
-#Configure save path
-PLOT_SAVE_PATH = 'saved_plots/'
+# Configure save path
+PLOT_SAVE_PATH = "saved_plots/"
 
-#We are going to use the traces per plot do add info to saved plots
+# We are going to use the traces per plot do add info to saved plots
 # since this is set below, initialize to none
 traces_per_plot = None
 trace_info = None
 
-#Create button callback method
+# Create button callback method
 def save_current_plot():
     "Save the plot locally"
 
-    #Set which trace goes in which plot on the last element of the column
+    # Set which trace goes in which plot on the last element of the column
     num_subplots = 0
     trace_names = []
-    for i,(trace_name,subplot_index) in enumerate(trace_info):
+    for i, (trace_name, subplot_index) in enumerate(trace_info):
         # Add subplot index to last column
-        local_storage_buffer[i,li] = subplot_index
+        local_storage_buffer[i, li] = subplot_index
         # Get the number of subplots
-        num_subplots = max(subplot_index,num_subplots)
+        num_subplots = max(subplot_index, num_subplots)
         # Add trace name
         trace_names.append(trace_name)
-    
-    #Assign a new subplot for time
+
+    # Assign a new subplot for time
     num_traces = len(trace_info)
     trace_names.append("Time(s)")
-    local_storage_buffer[num_traces,li] = num_subplots+1
+    local_storage_buffer[num_traces, li] = num_subplots + 1
 
-    #Set the plot name as the current time
+    # Set the plot name as the current time
     plot_name = datetime.datetime.now()
-    total_name = os.path.join(PLOT_SAVE_PATH, str(plot_name)\
-        .replace(' ','_')+'.parquet')
-    
-    #Remove colons from timestamp for windows file name compatibility
-    total_name = total_name.replace(":","-")
+    total_name = os.path.join(
+        PLOT_SAVE_PATH, str(plot_name).replace(" ", "_") + ".parquet"
+    )
 
-    #Create the dataframe object so that we can add ifnro about the subplot
+    # Remove colons from timestamp for windows file name compatibility
+    total_name = total_name.replace(":", "-")
+
+    # Create the dataframe object so that we can add ifnro about the subplot
     #  names
-    df = pd.DataFrame(local_storage_buffer[:local_storage_buffer_num_trace,
-                                           num_datapoints_in_plot:li+1].T,
-                      columns=trace_names)
+    df = pd.DataFrame(
+        local_storage_buffer[
+            :local_storage_buffer_num_trace, num_datapoints_in_plot : li + 1
+        ].T,
+        columns=trace_names,
+    )
     df.to_parquet(total_name)
 
-    #Output text confirming we saved
+    # Output text confirming we saved
     print(f"Saved the plot as {total_name}")
 
 
@@ -235,36 +259,36 @@ def save_current_plot():
 # PyQTgraph Configuration #
 ###########################
 
-#START QtApp 
+# START QtApp
 # You MUST do this once to initialize pyqtgraph
-app = QtGui.QApplication([])                                 
+app = QtGui.QApplication([])
 
 # Window title
 WINDOW_TITLE = "Real Time Plotter"
 
 # Set background white
-pg.setConfigOption('background', 'w')
-pg.setConfigOption('foreground', 'k')
+pg.setConfigOption("background", "w")
+pg.setConfigOption("foreground", "k")
 
 # Define the window object for the plot
 win = pg.GraphicsLayoutWidget(title=WINDOW_TITLE, show=False)
 
-#Create button to save plots
+# Create button to save plots
 save_button = QtGui.QPushButton("Save Plot")
 
-#Attach Callback 
+# Attach Callback
 save_button.clicked.connect(save_current_plot)
 
 
-#Create the GUI
+# Create the GUI
 window = QtGui.QWidget()
-hbox = QtGui.QVBoxLayout()  
+hbox = QtGui.QVBoxLayout()
 hbox.addWidget(win)
 hbox.addWidget(save_button)
 window.setLayout(hbox)
 window.show()
 
-#Close view when exiting
+# Close view when exiting
 app.aboutToQuit.connect(window.close)
 
 # Create the plot from the json file that is passed in
@@ -289,7 +313,6 @@ def initialize_plot(json_config, subplots_to_remove=None):
     top_plot_title: Reference to top plot title string to add on FPS
     trace_names: Array of trace names with subplot number attached to it
     """
-    
 
     # If there are old subplots, remove them
     if subplots_to_remove is not None:
@@ -311,19 +334,19 @@ def initialize_plot(json_config, subplots_to_remove=None):
 
     # Generate each subplot
     for plot_num, plot_description in enumerate(json_config.values()):
-        
+
         # Get the trace names for this plot
-        trace_names = plot_description['names']
+        trace_names = plot_description["names"]
 
         # Count how many traces we want
         num_traces = len(trace_names)
-        
+
         # Add the indices in the numpy array
         traces_per_plot.append(num_traces)
 
         # Initialize the new plot
         new_plot = win.addPlot()
-        
+
         # Move to the next row
         if NEW_SUBPLOT_IN_ROW == True:
             win.nextRow()
@@ -338,85 +361,94 @@ def initialize_plot(json_config, subplots_to_remove=None):
         new_plot.addLegend(**legend_style)
 
         # Add the axis info
-        if 'xlabel' in plot_description:
-            new_plot.setLabel('bottom', plot_description['xlabel'],
-                              **axis_label_style)
+        if "xlabel" in plot_description:
+            new_plot.setLabel(
+                "bottom", plot_description["xlabel"], **axis_label_style
+            )
 
-        if 'ylabel' in plot_description:
-            new_plot.setLabel('left', plot_description['ylabel'],
-                              **axis_label_style)
+        if "ylabel" in plot_description:
+            new_plot.setLabel(
+                "left", plot_description["ylabel"], **axis_label_style
+            )
 
-        #Get the x range information
-        if 'xrange' in plot_description:
-            num_datapoints_in_plot = plot_description['xrange']
+        # Get the x range information
+        if "xrange" in plot_description:
+            num_datapoints_in_plot = plot_description["xrange"]
         else:
             num_datapoints_in_plot = DEFAULT_NUM_DATAPOINTS_IN_PLOT
 
         # Potential performance boost
-        new_plot.setXRange(0,num_datapoints_in_plot)
+        new_plot.setXRange(0, num_datapoints_in_plot)
 
         # Get the y range
-        if 'yrange' in plot_description:
-            new_plot.setYRange(*plot_description['yrange'])
-        
+        if "yrange" in plot_description:
+            new_plot.setYRange(*plot_description["yrange"])
+
         # Set axis tick mark size
-        font=QtGui.QFont()
+        font = QtGui.QFont()
         font.setPixelSize(tick_size)
-        new_plot.getAxis("left").setStyle(tickFont = font)
+        new_plot.getAxis("left").setStyle(tickFont=font)
 
-        font=QtGui.QFont()
+        font = QtGui.QFont()
         font.setPixelSize(tick_size)
-        new_plot.getAxis("bottom").setStyle(tickFont = font)
-
+        new_plot.getAxis("bottom").setStyle(tickFont=font)
 
         # Add title
-        if 'title' in plot_description:
-            new_plot.setTitle(plot_description['title'],**title_style)
-            
+        if "title" in plot_description:
+            new_plot.setTitle(plot_description["title"], **title_style)
+
             if plot_num == 0:
-                top_plot_title = plot_description['title']
-        
+                top_plot_title = plot_description["title"]
+
         # If zeroth-plot does not have tittle, add something in blank
         # so fps counter gets style
         elif plot_num == 0:
-            new_plot.setTitle("",**title_style)
-
+            new_plot.setTitle("", **title_style)
 
         # Define default Style
-        colors = ['r','g','b','c','m','y']
-        if 'colors' in plot_description:
-            colors = plot_description['colors']
+        colors = ["r", "g", "b", "c", "m", "y"]
+        if "colors" in plot_description:
+            colors = plot_description["colors"]
 
         line_style = [QtCore.Qt.SolidLine] * num_traces
-        if 'line_style' in plot_description:
-            line_style = [QtCore.Qt.DashLine if desc == '-'
-                          else QtCore.Qt.SolidLine
-                          for desc
-                          in plot_description['line_style']]
+        if "line_style" in plot_description:
+            line_style = [
+                QtCore.Qt.DashLine if desc == "-" else QtCore.Qt.SolidLine
+                for desc 
+                in plot_description["line_style"]
+            ]
 
         line_width = [1] * num_traces
-        if 'line_width' in plot_description:
-            line_width = plot_description['line_width']
+        if "line_width" in plot_description:
+            line_width = plot_description["line_width"]
 
         # Generate all the trace objects
         for i in range(num_traces):
             # Create the pen object that defines the trace style
-            pen = pg.mkPen(color = colors[i], style=line_style[i],
-                           width=line_width[i])
+            pen = pg.mkPen(
+                color=colors[i], style=line_style[i], width=line_width[i]
+            )
             # Add new curve
             new_curve = pg.PlotCurveItem(name=trace_names[i], pen=pen)
             new_plot.addItem(new_curve)
             # Store pointer to update later
             subplots_traces.append(new_curve)
             # Store the current trace name
-            trace_info.append((trace_names[i],plot_num))
+            trace_info.append((trace_names[i], plot_num))
 
         # Add the new subplot
         subplots.append(new_plot)
 
     print("Initialized Plot!")
-    return traces_per_plot, subplots_traces, subplots, top_plot,\
-        top_plot_title, trace_info, num_datapoints_in_plot
+    return (
+        traces_per_plot,
+        subplots_traces,
+        subplots,
+        top_plot,
+        top_plot_title,
+        trace_info,
+        num_datapoints_in_plot,
+    )
 
 
 # Receive a numpy array
@@ -425,8 +457,8 @@ def recv_array(socket, flags=0, copy=True, track=False):
     md = socket.recv_json(flags=flags)
     msg = socket.recv(flags=flags, copy=copy, track=track)
     buf = memoryview(msg)
-    A = np.frombuffer(buf, dtype=md['dtype'])
-    return A.reshape(md['shape'])
+    A = np.frombuffer(buf, dtype=md["dtype"])
+    return A.reshape(md["shape"])
 
 
 # Create definitions to define when you receive data or new plots
@@ -434,20 +466,20 @@ RECEIVED_PLOT_UPDATE = 0
 RECEIVED_DATA = 1
 NOT_RECEIVED_DATA = 2
 
-#Variable to store initial time when data was missed
+# Variable to store initial time when data was missed
 time_when_data_was_missed = None
 
-#This indicates how long should we wait to sleep the cpu after a datapoint
+# This indicates how long should we wait to sleep the cpu after a datapoint
 # was missed and no new data arrives
 SLEEP_AFTER_X_SECONDS = 10
 
-#This indicates how long to sleep after many datapoints have been missed
+# This indicates how long to sleep after many datapoints have been missed
 SLEEP_X_SECONDS = 3
 
 # Define function to detect category
 def rec_type():
-    
-    #Keep track of the missed datapoints
+
+    # Keep track of the missed datapoints
     global time_when_data_was_missed
 
     # Sometimes we get miss-aligned data
@@ -457,35 +489,39 @@ def rec_type():
             received = socket.recv_string(flags=zmq.NOBLOCK)
 
             return int(received)
-        #If you get a value error, then you got data
+        # If you get a value error, then you got data
         except ValueError:
 
             if DEBUG_TEXT_ENABLED:
                 print(f"Had a value error. Expected int, received: {received}")
             else:
-                print(("Lost synchronization between client and server."
-                       " Please restart client"))
-        
-        #There is no data currently available
+                print(
+                    (
+                        "Lost synchronization between client and server."
+                        " Please restart client"
+                    )
+                )
+
+        # There is no data currently available
         except zmq.Again as e:
 
             # if DEBUG_TEXT_ENABLED:
             #     print("ZMQ.Again: No data received")
-            
+
             time_now = time.time()
 
-            #If its the first time, set original time to now
-            if (time_when_data_was_missed is None):
+            # If its the first time, set original time to now
+            if time_when_data_was_missed is None:
                 time_when_data_was_missed = time_now
 
-            #Sleep for one second if enough time has passed to save cpu time
-            if(time_now - time_when_data_was_missed > SLEEP_AFTER_X_SECONDS):
+            # Sleep for one second if enough time has passed to save cpu time
+            if time_now - time_when_data_was_missed > SLEEP_AFTER_X_SECONDS:
                 time_when_data_was_missed = None
                 time.sleep(SLEEP_X_SECONDS)
 
                 if DEBUG_TEXT_ENABLED:
                     print("Sleeping from no data")
-            
+
             return NOT_RECEIVED_DATA
 
 
@@ -508,30 +544,36 @@ while True:
     category = rec_type()
 
     # Do not continue unless you have initialized the plot
-    if(category == RECEIVED_PLOT_UPDATE):
-        
+    if category == RECEIVED_PLOT_UPDATE:
+
         # Receive plot configuration
-        flags = 0 
+        flags = 0
         plot_configuration = socket.recv_json(flags=flags)
 
         # Initialize plot
-        traces_per_plot, subplots_traces, subplots,\
-        top_plot, top_plot_title, trace_info, num_datapoints_in_plot \
-                = initialize_plot(plot_configuration, subplots)
-        
+        (
+            traces_per_plot,
+            subplots_traces,
+            subplots,
+            top_plot,
+            top_plot_title,
+            trace_info,
+            num_datapoints_in_plot,
+        ) = initialize_plot(plot_configuration, subplots)
+
         # Get the number of plots
         num_plots = len(subplots)
 
         # Get number of traces
         num_traces = sum(traces_per_plot)
 
-        #Setup local data buffer
-        # Since we save using the index, we just need to update 
+        # Setup local data buffer
+        # Since we save using the index, we just need to update
         # the index and not set the buffer to zero
         li = num_datapoints_in_plot
-        buffer_bounds = np.array([0,num_datapoints_in_plot])
+        buffer_bounds = np.array([0, num_datapoints_in_plot])
         local_storage_buffer_num_trace = num_traces + 1
-        local_storage_buffer[:local_storage_buffer_num_trace,:li] = 0
+        local_storage_buffer[:local_storage_buffer_num_trace, :li] = 0
 
         # You can now plot data
         initialized_plot = True
@@ -545,16 +587,15 @@ while True:
         # Get time to generate time stamps
         firstTime = perf_counter()
 
-    
     # Read some data and plot it
     elif (category == RECEIVED_DATA) and (initialized_plot == True):
 
         # Read in numpy array
         receive_np_array = recv_array(socket)
         # Get how many new values are in it
-        num_values = receive_np_array.shape[1]    
+        num_values = receive_np_array.shape[1]
 
-        #Increase the buffer bounds to plot the new data
+        # Increase the buffer bounds to plot the new data
         buffer_bounds += num_values
 
         # Remember how much you need to offset per plot
@@ -566,54 +607,61 @@ while True:
         lastTime = now
 
         if fps is None:
-            fps = 1.0/dt
+            fps = 1.0 / dt
         else:
-            s = np.clip(dt*3., 0, 1)
-            fps = fps * (1-s) + (1.0/dt) * s
+            s = np.clip(dt * 3.0, 0, 1)
+            fps = fps * (1 - s) + (1.0 / dt) * s
 
-        #Update every subplot
+        # Update every subplot
         for plot_index in range(num_plots):
-            
+
             # Update every trace
             for subplot_index in range(traces_per_plot[plot_index]):
 
                 # Get index to plot
                 i = subplot_offset + subplot_index
-               
+
                 # Update the local storage buffer
-                local_storage_buffer[i,li:li+num_values] = receive_np_array[i,:]
+                local_storage_buffer[
+                    i, li : li + num_values
+                ] = receive_np_array[i, :]
 
                 # Update the plot
-                subplots_traces[i].setData(local_storage_buffer[i,buffer_bounds[0]:buffer_bounds[1]])
+                subplots_traces[i].setData(
+                    local_storage_buffer[
+                        i, buffer_bounds[0] : buffer_bounds[1]
+                    ]
+                )
 
             # Update offset to account for the past loop's traces
             subplot_offset += traces_per_plot[plot_index]
 
-        #Calculate the current time stamp for the local storage buffer
+        # Calculate the current time stamp for the local storage buffer
         curr_timestamp = now - firstTime
-        local_storage_buffer[local_storage_buffer_num_trace-1,li:li+num_values] = curr_timestamp
+        local_storage_buffer[
+            local_storage_buffer_num_trace - 1, li : li + num_values
+        ] = curr_timestamp
 
-        #Increase the local storage index variable
+        # Increase the local storage index variable
         li += num_values
 
         # Update fps in title
         top_plot.setTitle(top_plot_title + f" - FPS:{fps:.0f}")
 
         # Indicate you MUST process the plot now
-        QtGui.QApplication.processEvents()    
+        QtGui.QApplication.processEvents()
 
     elif category == NOT_RECEIVED_DATA:
-        #Process other events to make plot responsive
-        QtGui.QApplication.processEvents()    
+        # Process other events to make plot responsive
+        QtGui.QApplication.processEvents()
 
-          
 
-#References
-#ZMQ Example code
-#https://zeromq.org/languages/python/
+# References
+# ZMQ Example code
+# https://zeromq.org/languages/python/
 
-#How to send/receive numpy arrays
-#https://pyzmq.readthedocs.io/en/latest/serialization.html
+# How to send/receive numpy arrays
+# https://pyzmq.readthedocs.io/en/latest/serialization.html
 
-#How to real time plot with pyqtgraph
-#https://stackoverflow.com/questions/45046239/python-realtime-plot-using-pyqtgraph
+# How to real time plot with pyqtgraph
+# https://stackoverflow.com/questions/45046239/python-realtime-plot-using-pyqtgraph
