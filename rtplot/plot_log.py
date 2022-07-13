@@ -20,7 +20,7 @@ data = pd.read_parquet(file_path)
 #We store the subplots in the last columns
 subplots = data.values[-1,:-1]
 num_subplots = int(np.max(subplots))+1
-fig,axs = plt.subplots(num_subplots,1)
+fig,axs = plt.subplots(num_subplots,1,sharex=True)
 
 #Convert axis
 if isinstance(axs, np.ndarray) != True:
