@@ -213,8 +213,14 @@ traces_per_plot = None
 trace_info = None
 
 # Create button callback method
-def save_current_plot():
-    "Save the plot locally"
+def save_current_plot(log_name=None):
+    """
+    Save the plot locally
+
+    Keywork arguments
+    log_name -- Name of the file that will be saved. If left None, the current
+            time stamp will be used
+    """
 
     # Set which trace goes in which plot on the last element of the column
     num_subplots = 0
@@ -232,20 +238,27 @@ def save_current_plot():
     trace_names.append("Time(s)")
     local_storage_buffer[num_traces, li] = num_subplots + 1
 
-    # Set the plot name as the current time
-    plot_name = datetime.datetime.now()
+    #Set the log name if it is not provided
+    if log_name is None:
+
+        # Set the plot name as the current time
+        log_name = datetime.datetime.now()
+        #Remove spaces for underscores for no real reason
+        log_name = str(log_name).replace(" ", "_")
+        # Remove colons from timestamp for windows file name compatibility
+        log_name = log_name.replace(":", "-")
+
+    #Add to the save path for the datafiles
     total_name = os.path.join(
-        PLOT_SAVE_PATH, str(plot_name).replace(" ", "_") + ".parquet"
+        PLOT_SAVE_PATH, log_name + ".parquet"
     )
-
-    # Remove colons from timestamp for windows file name compatibility
-    total_name = total_name.replace(":", "-")
-
+    
     # Create the dataframe object so that we can add ifnro about the subplot
     #  names
     df = pd.DataFrame(
         local_storage_buffer[
-            :local_storage_buffer_num_trace, num_datapoints_in_plot : li + 1
+            :local_storage_buffer_num_trace,
+            num_datapoints_in_plot : li + 1
         ].T,
         columns=trace_names,
     )
@@ -465,6 +478,7 @@ def recv_array(socket, flags=0, copy=True, track=False):
 RECEIVED_PLOT_UPDATE = 0
 RECEIVED_DATA = 1
 NOT_RECEIVED_DATA = 2
+SAVE_PLOT = 3
 
 # Variable to store initial time when data was missed
 time_when_data_was_missed = None
@@ -474,7 +488,7 @@ time_when_data_was_missed = None
 SLEEP_AFTER_X_SECONDS = 10
 
 # This indicates how long to sleep after many datapoints have been missed
-SLEEP_X_SECONDS = 3
+SLEEP_X_SECONDS = 0.1
 
 # Define function to detect category
 def rec_type():
@@ -486,9 +500,17 @@ def rec_type():
     # In this case just ignore the data and wait until you have a valid type
     while True:
         try:
+            #Receive a string from the user
             received = socket.recv_string(flags=zmq.NOBLOCK)
 
-            return int(received)
+            #Convert to an int. This can cause a casting value error
+            received_type = int(received)
+
+            #Reset timer if valid input was received
+            time_when_data_was_missed = None
+
+            return received_type
+        
         # If you get a value error, then you got data
         except ValueError:
 
@@ -516,7 +538,6 @@ def rec_type():
 
             # Sleep for one second if enough time has passed to save cpu time
             if time_now - time_when_data_was_missed > SLEEP_AFTER_X_SECONDS:
-                time_when_data_was_missed = None
                 time.sleep(SLEEP_X_SECONDS)
 
                 if DEBUG_TEXT_ENABLED:
@@ -650,6 +671,14 @@ while True:
 
         # Indicate you MUST process the plot now
         QtGui.QApplication.processEvents()
+
+    elif category == SAVE_PLOT:
+
+        #Get the log name
+        log_name = socket.recv_string()
+
+        #Save the plot with the log name
+        save_current_plot(log_name)
 
     elif category == NOT_RECEIVED_DATA:
         # Process other events to make plot responsive

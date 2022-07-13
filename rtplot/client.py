@@ -64,7 +64,7 @@ else:
 #Create definitions for categories
 SENDING_PLOT_UPDATE = "0"
 SENDING_DATA = "1"
-
+SAVE_PLOT = "3"
 
 def local_plot():
     """Send data to a plot in the same computer"""
@@ -218,3 +218,20 @@ def initialize_plots(plot_descriptions=1):
 
     #Send the description
     socket.send_json(plot_desc_dict)
+
+
+def save_plot(log_name):
+    """
+    Tell the server to store the data that has been sent for the latest
+    plot configuration
+    
+    Keyword Arguments
+    log_name -- string, name of the file that will be stored
+        
+    """
+
+    #Indicate that we will send a plot save requset
+    socket.send_string(SAVE_PLOT)
+
+    #Send the save plot name
+    socket.send_string(log_name)
