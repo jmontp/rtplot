@@ -47,10 +47,11 @@ if known_pi_address_prev:
     #If you cannot connect to the socket, alert user and continue
     except zmq.error.ZMQError as e:
         failed_bind = True
+        
         print("rtplot.client: Could not connect to default address '{}'".format(e))
-        print("               Fine if doing local plots")
+        print("               There might be another client running")
+        print("               This is fine if doing local plots")
    
-
 # Secondary default behavior is that you know the ip address 
 # of the computer that will plot
 else:
@@ -79,19 +80,32 @@ def plot_to_neurobionics_tv():
     configure_ip(ip = tv_computer_address)
     
 
-def configure_ip(ip=None, known_pi_address = False):
+def configure_port(new_port:int):
+    """Change the port
+    
+    Keyword Arguments:
+    new_port -- int four digit number that represents the port 
+    
+    """    
+    #Create the new bind address
+    new_bind_address = f"tcp://*:{new_port}"
+
+    #Run the ip configuration
+    configure_ip(known_pi_address=True, new_bind_address=new_bind_address)
+
+def configure_ip(ip = None, known_pi_address = False, new_bind_address = None):
     """Connect to a subscriber at a specific IP address
     
     Inputs
     ------
     ip: Ip address or string formated to protocol:address:port
-    fixed_subscriber: bool, defines if either the subscriber of the 
-                      publisher has a fixed ip address
+    known_pi_address: bool, if true, the plot server will connect to the client
     """
 
     ## Get the current address
     global prev_address
     global known_pi_address_prev
+    global bind_address
     
     ## Disconnect from the previous configuration
     # if known_pi_address_prev and not failed_bind:
@@ -100,30 +114,38 @@ def configure_ip(ip=None, known_pi_address = False):
     #     socket.disconnect(prev_address)
     
     ## Format the incomming string
-
     #If you just get the ip address and no port, format correctly
-    num_colons = ip.count(':')
     
-    #You only got the ip address
-    if num_colons == 0:
-        connect_address = "tcp://{}:5555".format(ip)
-    #You got ip address and port
-    elif num_colons == 1:
-        connect_address = "tcp://{}".format(ip)
-    #You got everything
-    else:
-        connect_address = ip
+    if ip is not None:
+        num_colons = ip.count(':')
+        
+        #You only got the ip address
+        if num_colons == 0:
+            connect_address = "tcp://{}:5555".format(ip)
+        #You got ip address and port
+        elif num_colons == 1:
+            connect_address = "tcp://{}".format(ip)
+        #You got everything
+        else:
+            connect_address = ip
 
-    print("rtplot.client: Connecting to address {}".format(connect_address))
 
     ## Connect to new configuration
     if(known_pi_address):
-        #Bind incomming computers to the pi
-        socket.bind(bind_address)
+        
+        if(new_bind_address is not None):
+            print(f"rtplot.client: Connecting to address {new_bind_address}")
+            socket.bind(new_bind_address)
+        else:
+            #Bind incomming computers to the pi
+            print(f"rtplot.client: Connecting to address {bind_address}")
+            socket.bind(bind_address)
+        
         prev_address = None
 
     else:
         #Connect to the computer that will do the plotting
+        print(f"rtplot.client: Connecting to address {connect_address}")
         socket.connect(connect_address)
         prev_address = connect_address
 
