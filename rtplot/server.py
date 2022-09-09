@@ -157,7 +157,14 @@ socket = context.socket(zmq.SUB)
 # since that is the current use case
 if args.pi_ip is not None:
     # Connect to the supplied IP address
-    connect_string = f"tcp://{args.pi_ip}:5555"
+    
+    #If you have a colon, then the user indicated a port
+    if args.pi_ip.count(":")  == 1:
+        connect_string = f"tcp://{args.pi_ip}"    
+    else:
+        connect_string = f"tcp://{args.pi_ip}:5555"
+    
+    #Connect to that socket
     socket.connect(connect_string)
     print(f"Connected to {connect_string}")
 

@@ -12,7 +12,7 @@ The main highlight in this plotter are the following:
 
 # Install 
 
-Run in the parent folder containing the repo
+Run in the parent folder containing the repo (requires [setuptools](https://pypi.org/project/setuptools/))
 
 > python3 -m pip install -e rtplot/
 
@@ -27,6 +27,9 @@ Run in the parent folder containing the repo
 
 One-liner to install everything:
 ```pip3 install pyarrow pyqtgraph pyside6 pyzmq pandas```
+
+
+If you are using WSL, you need to install an xorg server such as [vcXsrv](https://sourceforge.net/projects/vcxsrv/)
 
 # How to use
 
