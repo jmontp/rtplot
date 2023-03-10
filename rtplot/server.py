@@ -2,7 +2,7 @@
 import zmq
 
 # Import plotting
-from pyqtgraph.Qt import QtGui, QtCore
+from pyqtgraph.Qt import QtGui, QtCore, QtWidgets
 import pyqtgraph as pg
 
 # Common imports
@@ -217,7 +217,8 @@ PLOT_SAVE_PATH = "saved_plots/"
 # We are going to use the traces per plot do add info to saved plots
 # since this is set below, initialize to none
 traces_per_plot = None
-trace_info = None
+trace_labels = None
+non_plot_labels = None
 
 # Create button callback method
 def save_current_plot(log_name=None):
@@ -232,21 +233,24 @@ def save_current_plot(log_name=None):
     # Set which trace goes in which plot on the last element of the column
     num_subplots = 0
     trace_names = []
-    for i, (trace_name, subplot_index) in enumerate(trace_info):
+    for i, (trace_name, subplot_index) in enumerate(trace_labels):
         # Add subplot index to last column
         local_storage_buffer[i, li] = subplot_index
         # Get the number of subplots
         num_subplots = max(subplot_index, num_subplots)
         # Add trace name
         trace_names.append(trace_name)
+    
+    # Set the non-plot labels to have a index of -1
+    
 
     # Assign a new subplot for time
-    num_traces = len(trace_info)
+    num_traces = len(trace_labels)
     trace_names.append("Time(s)")
     local_storage_buffer[num_traces, li] = num_subplots + 1
 
     #Set the log name if it is not provided
-    if log_name is None:
+    if log_name is None or log_name is False:
 
         # Set the plot name as the current time
         log_name = datetime.datetime.now()
@@ -260,14 +264,14 @@ def save_current_plot(log_name=None):
         PLOT_SAVE_PATH, log_name + ".parquet"
     )
     
-    # Create the dataframe object so that we can add ifnro about the subplot
+    # Create the dataframe object so that we can add info about the subplot
     #  names
     df = pd.DataFrame(
         local_storage_buffer[
-            :local_storage_buffer_num_trace,
+            :local_storage_buffer_num_trace + len(non_plot_labels),
             num_datapoints_in_plot : li + 1
         ].T,
-        columns=trace_names,
+        columns=trace_names + non_plot_labels,
     )
     df.to_parquet(total_name)
 
@@ -281,7 +285,9 @@ def save_current_plot(log_name=None):
 
 # START QtApp
 # You MUST do this once to initialize pyqtgraph
-app = QtGui.QApplication([])
+# app = QtWidgets.QApplication([])
+app = QtWidgets.QApplication([])
+
 
 # Window title
 WINDOW_TITLE = "Real Time Plotter"
@@ -294,15 +300,15 @@ pg.setConfigOption("foreground", "k")
 win = pg.GraphicsLayoutWidget(title=WINDOW_TITLE, show=False)
 
 # Create button to save plots
-save_button = QtGui.QPushButton("Save Plot")
+save_button = QtWidgets.QPushButton("Save Plot")
 
 # Attach Callback
 save_button.clicked.connect(save_current_plot)
 
 
 # Create the GUI
-window = QtGui.QWidget()
-hbox = QtGui.QVBoxLayout()
+window = QtWidgets.QWidget()
+hbox = QtWidgets.QVBoxLayout()
 hbox.addWidget(win)
 hbox.addWidget(save_button)
 window.setLayout(hbox)
@@ -320,7 +326,10 @@ def initialize_plot(json_config, subplots_to_remove=None):
 
     json_config: Python dictionary with relevant plot configuration
     subplots_to_remove: Previous plot subplot items that will be removed
-                        from the window
+                        from the window. This is meant for internal use.
+                        Leave as None.
+    only_log_traces: list of trace names that will only be logged and not 
+        displayed
 
     Returns
     -------
@@ -331,7 +340,9 @@ def initialize_plot(json_config, subplots_to_remove=None):
     num_plots: Number of subplots
     top_plot: Reference to top plot object to update title of
     top_plot_title: Reference to top plot title string to add on FPS
-    trace_names: Array of trace names with subplot number attached to it
+    trace_labels: Array of trace names with subplot number attached to it
+    num_datapoints_in_plot: defines the x-axis width number of datapoints
+    non_plot_labels: Array of trace names that will not be plotted
     """
 
     # If there are old subplots, remove them
@@ -345,6 +356,7 @@ def initialize_plot(json_config, subplots_to_remove=None):
     subplots_traces = []
     subplots = []
     trace_info = []
+    non_plot_labels = []
 
     # Initialize the top plot to None so that we can grab it
     top_plot = None
@@ -355,6 +367,12 @@ def initialize_plot(json_config, subplots_to_remove=None):
     # Generate each subplot
     for plot_num, plot_description in enumerate(json_config.values()):
 
+        # If the non_plot attribute is set to true, ignore the traces in this
+        # plot
+        if 'non_plot_labels' in plot_description:
+            non_plot_labels = plot_description['non_plot_labels']
+            continue
+        
         # Get the trace names for this plot
         trace_names = plot_description["names"]
 
@@ -468,6 +486,7 @@ def initialize_plot(json_config, subplots_to_remove=None):
         top_plot_title,
         trace_info,
         num_datapoints_in_plot,
+        non_plot_labels
     )
 
 
@@ -585,8 +604,9 @@ while True:
             subplots,
             top_plot,
             top_plot_title,
-            trace_info,
+            trace_labels,
             num_datapoints_in_plot,
+            non_plot_labels,
         ) = initialize_plot(plot_configuration, subplots)
 
         # Get the number of plots
@@ -594,6 +614,9 @@ while True:
 
         # Get number of traces
         num_traces = sum(traces_per_plot)
+
+        # Get number of traces that will not be plotted
+        num_non_plot_traces = len(non_plot_labels)
 
         # Setup local data buffer
         # Since we save using the index, we just need to update
@@ -670,6 +693,15 @@ while True:
             local_storage_buffer_num_trace - 1, li : li + num_values
         ] = curr_timestamp
 
+        #Add the non-plotting variables
+        local_storage_buffer[
+            local_storage_buffer_num_trace:local_storage_buffer_num_trace+num_non_plot_traces,
+            li : li + num_values
+        ] = receive_np_array[
+            local_storage_buffer_num_trace:local_storage_buffer_num_trace+num_non_plot_traces,:]
+
+
+
         # Increase the local storage index variable
         li += num_values
 
@@ -677,7 +709,7 @@ while True:
         top_plot.setTitle(top_plot_title + f" - FPS:{fps:.0f}")
 
         # Indicate you MUST process the plot now
-        QtGui.QApplication.processEvents()
+        QtWidgets.QApplication.processEvents()
 
     elif category == SAVE_PLOT:
 
@@ -689,7 +721,7 @@ while True:
 
     elif category == NOT_RECEIVED_DATA:
         # Process other events to make plot responsive
-        QtGui.QApplication.processEvents()
+        QtWidgets.QApplication.processEvents()
 
 
 # References
