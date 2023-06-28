@@ -78,6 +78,7 @@ You can control the following things when calling ```client.initialize_plots()``
 * 'line_style' - Defines wheter or not a trace is dashed or not. 
     * '-' - represents dashed line
     * "" - emptry string (or any other string) represents a normal line
+* 'line_width' - Defines how thick the plot lines are. Expects an integer
 * 'title' - Sets the title to the plot
 * 'ylabel' - Sets the y label of the plot
 * 'xlabel' - Sets the x label of the plot
