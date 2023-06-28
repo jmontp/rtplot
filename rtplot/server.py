@@ -39,40 +39,61 @@ parser.add_argument(
     action="store",
     type=str,
 )
+
+# Add argument to enable bigger fonts
 parser.add_argument(
     "-b",
     "--bigscreen",
     help="Increase fonts to print in the big screen",
     action="store_true",
 )
+
+# Add argument to run local plots
 parser.add_argument(
     "-l", "--local", help="Run local plotting server", action="store_true"
 )
+
+# Add argument to expect the pi to connect to us
 parser.add_argument(
     "-s",
     "--static_ip",
     help=(
-        "Use this to connec the pi to your computer"
-        "when it has a konwn fixed IP"
+        "Use this to connect the pi to your computer. Pi needs to run "
+        "configure_ip('your_ip')"
     ),
     action="store_true",
 )
+
+# Add argument to create subplots in separate columns instead of rows
 parser.add_argument(
     "-c",
     "--column",
     help="Create new plots in separate columns",
     action="store_false",
 )
+
+# Add argument to enable bigger fonts
 parser.add_argument(
     "-d", "--debug", help="Add debug text output", action="store_true"
 )
+
+# Add argument to show user the options in the plotter
 parser.add_argument(
     "-t",
     "--plot_config",
-    help="Print configuration of items of",
+    help="Detail all the options that the plotter accepts",
     action="store_true",
 )
 
+# Add argument to skip every n datapoints
+parser.add_argument(
+    "-n",
+    "--skip",
+    help="Skip every n datapoints",
+    action="store",
+    type=int,
+    default=1,
+)
 
 # Read in the arguments
 args = parser.parse_args()
@@ -94,6 +115,8 @@ if args.plot_config is True:
         "\n\r\t'' - emptry string (or any other string) represents a"
         "normal line"
         "\n\r"
+        "\n\r'line_width' - Defines the width of the line. Expects an integer"
+        "\n\r"
         "\n\r'title' - Sets the title to the plot"
         "\n\r"
         "\n\r'ylabel' - Sets the y label of the plot"
@@ -113,6 +136,7 @@ if args.plot_config is True:
         "\n\rYou only need to specify the things that you want, if the"
         " dictionary element is left out then the default value is used."
         "\n\r"
+        
     )
 
     print(help_text)
@@ -142,6 +166,9 @@ NEW_SUBPLOT_IN_ROW = args.column
 
 # Define if debug text output is set on
 DEBUG_TEXT_ENABLED = args.debug
+
+# Define how many datapoints are skipped
+SKIP_PLOT_DATAPOINTS = args.skip
 
 ###################
 # ZMQ Networking #
@@ -585,6 +612,14 @@ subplots = None
 # Make sure that you don't try to plot data without having a plot
 initialized_plot = False
 
+# Create a counter that will be used in case we want to update the plot 
+# every X datapoints
+data_counter = 0
+
+# Create a counter that will be used to determine if the incoming data is 
+# coming in faster than we can process it
+data_rate_counter = 0
+
 # Main code loop
 while True:
     # Receive the type of information
@@ -592,6 +627,9 @@ while True:
 
     # Do not continue unless you have initialized the plot
     if category == RECEIVED_PLOT_UPDATE:
+
+        # Reset the data counter to zero
+        data_counter = 0
 
         # Receive plot configuration
         flags = 0
@@ -700,26 +738,40 @@ while True:
         ] = receive_np_array[
             local_storage_buffer_num_trace:local_storage_buffer_num_trace+num_non_plot_traces,:]
 
-
-
         # Increase the local storage index variable
         li += num_values
 
         # Update fps in title
-        top_plot.setTitle(top_plot_title + f" - FPS:{fps:.0f}")
+        if data_rate_counter < 100:
+            color = "green"
+        else:
+            color = "red"
+        top_plot.setTitle(top_plot_title + f" - FPS:{fps:.0f}", color=color)
 
-        # Indicate you MUST process the plot now
-        QtWidgets.QApplication.processEvents()
+        # Update the data counter and data_rate counter
+        data_counter += 1
+        data_rate_counter += 1
+
+        # If you have reached the number of datapoints to update the plot
+        # update the plot
+        if data_counter % SKIP_PLOT_DATAPOINTS == 0:
+            # Indicate you MUST process the plot now
+            QtWidgets.QApplication.processEvents()
+            # Reset the data counter
+            data_counter = 0
 
     elif category == SAVE_PLOT:
-
         #Get the log name
         log_name = socket.recv_string()
-
         #Save the plot with the log name
         save_current_plot(log_name)
 
     elif category == NOT_RECEIVED_DATA:
+
+        # If we have not received data for a while, set the data rate counter
+        # to zero
+        data_rate_counter = 0
+
         # Process other events to make plot responsive
         QtWidgets.QApplication.processEvents()
 
