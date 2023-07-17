@@ -76,7 +76,7 @@ def local_plot():
 def plot_to_neurobionics_tv():
     """Send data to a plot in the same computer"""
 
-    tv_computer_address = "tcp://141.212.77.109:5555"
+    tv_computer_address = "tcp://141.212.77.23:5555"
     configure_ip(ip = tv_computer_address)
     
 

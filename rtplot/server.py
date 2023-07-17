@@ -26,7 +26,10 @@ import datetime
 ###########################
 
 # Create command line arguments
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(
+    # help=("Plotter for real time data. By default it will accept plots, however"
+    # "" )
+)
 
 # Add argument to enable bigger fonts
 parser.add_argument(
@@ -45,22 +48,6 @@ parser.add_argument(
     "-b",
     "--bigscreen",
     help="Increase fonts to print in the big screen",
-    action="store_true",
-)
-
-# Add argument to run local plots
-parser.add_argument(
-    "-l", "--local", help="Run local plotting server", action="store_true"
-)
-
-# Add argument to expect the pi to connect to us
-parser.add_argument(
-    "-s",
-    "--static_ip",
-    help=(
-        "Use this to connect the pi to your computer. Pi needs to run "
-        "configure_ip('your_ip')"
-    ),
     action="store_true",
 )
 
@@ -157,9 +144,6 @@ else:
     legend_style = {"labelTextSize": "8pt"}
     tick_size = 12
 
-# Get flag for local plotting
-fixed_address = args.local or args.static_ip
-
 # Define if a new subplot is placed in a
 # new row or columns
 NEW_SUBPLOT_IN_ROW = args.column
@@ -195,16 +179,7 @@ if args.pi_ip is not None:
     socket.connect(connect_string)
     print(f"Connected to {connect_string}")
 
-# Elif default to a known address
-elif not fixed_address:
-    # Connect to neurobionics pi - default behaviour for now
-    connect_string = "tcp://10.0.0.200:5555"
-
-    socket.connect(connect_string)
-    print(f"Connected to {connect_string}")
-
-# If we have a fixed address, then the subscriber can reach us
-# good for local plots or fixed ip address
+# Default behavior, wait for people to connect to you
 else:
     # Bind so that you can get more
     socket.bind("tcp://*:5555")
