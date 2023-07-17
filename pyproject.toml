@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "better-rtplot"
+version = "0.1.0"
+description = ""
+authors = ["jmontp <jmontp@umich.edu>"]
+license = "GPL V3.0"
+readme = "README.md"
+packages = [{include = "rtplot"}]
+
+[tool.poetry.dependencies]
+python = ">= 3.8, <3.11"
+pyqtgraph = "0.13.0"
+pyside6 = "<= 6.4.0"
+pandas = "1.5.3"
+numpy = "1.23.5"
+pyarrow = "11.0.0"
+pyzmq = "25.0.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
