@@ -11,22 +11,7 @@ The main highlight in this plotter are the following:
 
 
 # Install 
-
-Run in the parent folder containing the repo (requires [setuptools](https://pypi.org/project/setuptools/))
-
-> python3 -m pip install -e rtplot/
-
-
-# Dependencies
-
-| Data-Plotting Computer  | Both Computers|
-| ------------- |:-------------:|
-| [pyqtgraph](https://pyqtgraph.readthedocs.io/en/latest/installation.html) ```pip3 install pyqtgraph ``` ```pip3 install pyside6``` | [PyZMQ](https://zeromq.org/languages/python/) ```pip3 install pyzmq```  |
-| [Pandas](https://pandas.pydata.org/docs/getting_started/install.html) ```pip3 install pandas```      |       |
-| [Pyarrow](https://arrow.apache.org/docs/python/install.html) ```pip3 install pyarrow``` |      |
-
-One-liner to install everything:
-```pip3 install pyarrow pyqtgraph pyside6 pyzmq pandas```
+```pip install better-rtplot```
 
 
 If you are using WSL, you need to install an xorg server such as [vcXsrv](https://sourceforge.net/projects/vcxsrv/)
