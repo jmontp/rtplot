@@ -212,7 +212,7 @@ files = [
 name = "pyqtgraph"
 version = "0.13.0"
 description = "Scientific Graphics and GUI Library for Python"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "pyqtgraph-0.13.0-py3-none-any.whl", hash = "sha256:fcc83d5f8e2a665f2edfa29c85e658c0cc54bde0e4e21a20d9429350c374109c"},
@@ -226,7 +226,7 @@ numpy = ">=1.20.0"
 name = "pyside6"
 version = "6.4.0"
 description = "Python bindings for the Qt cross-platform application and UI framework"
-optional = false
+optional = true
 python-versions = "<3.11,>=3.6"
 files = [
     {file = "PySide6-6.4.0-cp36-abi3-macosx_10_9_universal2.whl", hash = "sha256:eeed99066628c44113c21ba5eccd6c229d8f7ee65834a7fc45c64b0e636c606d"},
@@ -246,7 +246,7 @@ shiboken6 = "6.4.0"
 name = "pyside6-addons"
 version = "6.4.0"
 description = "Python bindings for the Qt cross-platform application and UI framework (Addons)"
-optional = false
+optional = true
 python-versions = "<3.11,>=3.6"
 files = [
     {file = "PySide6_Addons-6.4.0-cp36-abi3-macosx_10_9_universal2.whl", hash = "sha256:aceb568a684b88114c8928247019a9ffc3e133c4fe7722c7ce62224db338b335"},
@@ -265,7 +265,7 @@ shiboken6 = "6.4.0"
 name = "pyside6-essentials"
 version = "6.4.0"
 description = "Python bindings for the Qt cross-platform application and UI framework (Essentials)"
-optional = false
+optional = true
 python-versions = "<3.11,>=3.6"
 files = [
     {file = "PySide6_Essentials-6.4.0-cp36-abi3-macosx_10_9_universal2.whl", hash = "sha256:6e11d3a7fe013bb5b259066755983378d4ae2f582e5935fd5950c3dcfa0c3ec6"},
@@ -397,7 +397,7 @@ cffi = {version = "*", markers = "implementation_name == \"pypy\""}
 name = "shiboken6"
 version = "6.4.0"
 description = "Python/C++ bindings helper module"
-optional = false
+optional = true
 python-versions = "<3.11,>=3.6"
 files = [
     {file = "shiboken6-6.4.0-cp36-abi3-macosx_10_9_universal2.whl", hash = "sha256:76ba24af98eb15cbdfb483142696c5ae22537d2df84c06b44eb1ab66280b29b4"},
@@ -422,4 +422,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = ">= 3.8, <3.11"
-content-hash = "df7bd413667dc40e73012a1409ec132448721858266c57055c116c6657613db5"
+content-hash = "f42fd1bb1018bdcae97b4c75857bb6a4954059b4c74d9e5bffcd8ed61e2b3c12"

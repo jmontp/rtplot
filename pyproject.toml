@@ -9,8 +9,8 @@ packages = [{include = "rtplot"}]
 
 [tool.poetry.dependencies]
 python = ">= 3.8, <3.11"
-pyqtgraph = "0.13.0"
-pyside6 = "<= 6.4.0"
+pyqtgraph = {version = "0.13.0", optional = true}
+pyside6 = {version = "<= 6.4.0", optional = true}
 pandas = "1.5.3"
 numpy = "1.23.5"
 pyarrow = "11.0.0"
