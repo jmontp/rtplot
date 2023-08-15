@@ -82,6 +82,28 @@ parser.add_argument(
     default=1,
 )
 
+# Add argument to change the save directory
+parser.add_argument(
+    "-sd",
+    "--save-dir",
+    help="Directory to save the data to. Default is to save in \
+    the current directory",
+    action="store",
+    type=str,
+    default=os.getcwd(),
+)
+
+# Add argument to change the save name
+parser.add_argument(
+    "-sn",
+    "--save-name",
+    help="Name of the file to save the data to. Default is to save \
+    the data to the current directory",
+    action="store",
+    type=str,
+    default=None,
+)
+
 # Read in the arguments
 args = parser.parse_args()
 
@@ -154,6 +176,20 @@ DEBUG_TEXT_ENABLED = args.debug
 # Define how many datapoints are skipped
 SKIP_PLOT_DATAPOINTS = args.skip
 
+# Define the save directory
+PLOT_SAVE_PATH = args.save_dir
+if PLOT_SAVE_PATH is not None:
+    # Make it absolute path
+    PLOT_SAVE_PATH = os.path.abspath(PLOT_SAVE_PATH)
+    # If the save directory doesn't exist, create it
+    if not os.path.exists(PLOT_SAVE_PATH):
+        os.makedirs(PLOT_SAVE_PATH)
+print(f"Plots will be saved in: {PLOT_SAVE_PATH}")
+
+
+# Define the save name
+PLOT_SAVE_NAME = args.save_name
+
 ###################
 # ZMQ Networking #
 ##################
@@ -188,7 +224,6 @@ else:
 # Initialize subscriber
 socket.setsockopt_string(zmq.SUBSCRIBE, "")
 
-
 ###############################
 # Local Storage Configuration #
 ###############################
@@ -212,9 +247,6 @@ li = DEFAULT_NUM_DATAPOINTS_IN_PLOT
 
 # Set how many traces we have
 local_storage_buffer_num_trace = 1
-
-# Configure save path
-PLOT_SAVE_PATH = "saved_plots/"
 
 # We are going to use the traces per plot do add info to saved plots
 # since this is set below, initialize to none
@@ -244,22 +276,29 @@ def save_current_plot(log_name=None):
         trace_names.append(trace_name)
     
     # Set the non-plot labels to have a index of -1
-    
+
 
     # Assign a new subplot for time
     num_traces = len(trace_labels)
     trace_names.append("Time(s)")
     local_storage_buffer[num_traces, li] = num_subplots + 1
 
+    # Get the timestamp for the plot name
+    timestamp = str(datetime.datetime.now())
+    # Remove colons from timestamp for windows file name compatibility
+    # Remove spaces for underscores so it looks nicer
+    timestamp = timestamp.replace(" ", "_").replace(":", "-")
+
     #Set the log name if it is not provided
     if log_name is None or log_name is False:
-
-        # Set the plot name as the current time
-        log_name = datetime.datetime.now()
-        #Remove spaces for underscores for no real reason
-        log_name = str(log_name).replace(" ", "_")
-        # Remove colons from timestamp for windows file name compatibility
-        log_name = log_name.replace(":", "-")
+        if PLOT_SAVE_NAME is not None:
+            log_name = PLOT_SAVE_NAME + "_"
+        else:
+            # Set the plot name as the current time
+            log_name = 'rtplot_' 
+    
+    #Add the timestamp to the log name
+    log_name += timestamp
 
     #Add to the save path for the datafiles
     total_name = os.path.join(
@@ -279,7 +318,6 @@ def save_current_plot(log_name=None):
 
     # Output text confirming we saved
     print(f"Saved the plot as {total_name}")
-
 
 ###########################
 # PyQTgraph Configuration #
@@ -450,10 +488,10 @@ def initialize_plot(json_config, subplots_to_remove=None):
         if "colors" in plot_description:
             colors = plot_description["colors"]
 
-        line_style = [QtCore.Qt.SolidLine] * num_traces
+        line_style = [QtCore.Qt.PenStyle.SolidLine] * num_traces
         if "line_style" in plot_description:
             line_style = [
-                QtCore.Qt.DashLine if desc == "-" else QtCore.Qt.SolidLine
+                QtCore.Qt.PenStyle.DashLine if desc == "-" else QtCore.Qt.PenStyle.SolidLine
                 for desc 
                 in plot_description["line_style"]
             ]
