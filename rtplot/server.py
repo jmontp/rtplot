@@ -276,7 +276,9 @@ def save_current_plot(log_name=None):
         trace_names.append(trace_name)
     
     # Set the non-plot labels to have a index of -1
-
+    local_storage_buffer[
+        local_storage_buffer_num_trace:local_storage_buffer_num_trace+num_non_plot_traces, 
+        li] = -1
 
     # Assign a new subplot for time
     num_traces = len(trace_labels)
@@ -755,11 +757,22 @@ while True:
         li += num_values
 
         # Update fps in title
+        # First verify if we are plotting slower than we are getting info
         if data_rate_counter < 100:
             color = "green"
         else:
             color = "red"
-        top_plot.setTitle(top_plot_title + f" - FPS:{fps:.0f}", color=color)
+        
+        # If we have non-plotting variables, add them the amount to the title
+        if num_non_plot_traces > 0:
+            non_plot_text = f" - Non Plot Trace: {num_non_plot_traces}"
+        else:
+            non_plot_text = ""
+        
+        fps_text = f" - FPS:{fps:.0f}"
+        # IF not, don't even include it
+        top_plot.setTitle(top_plot_title + non_plot_text + fps_text,
+                            color=color)
 
         # Update the data counter and data_rate counter
         data_counter += 1
