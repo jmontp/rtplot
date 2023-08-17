@@ -35,6 +35,7 @@ In more detail:
 ## Step 1: Run the program that visualizes the data (server.py)
 
 To run the server script, you can run the following code in the command line 
+
 ```python3 -m rtplot.server```
 
 This will open a window which will wait for plots that are sent by a client. This is a convenient setup if you know the IP address of the computer that is running the server. However, if you don't know the IP address, you can specify the ip address of the computer that is sending data (e.g. the client) with the following line:
