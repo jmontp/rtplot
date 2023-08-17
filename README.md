@@ -14,9 +14,12 @@ The main highlight in this plotter are the following:
 
 
 # Install 
-To isntall just the client (can only send data)
+To install just the client (can only send data)
+
 ```pip install better-rtplot```
+
 To install the client and the dependencies for the server. This is not recommended for smaller devices since some dependencies are large.
+
 ```pip install better-rtplot[server]```
 
 If you are using WSL, you need to install an xorg server such as [vcXsrv](https://sourceforge.net/projects/vcxsrv/) to see the plot. However, this should run in a native windows install of python.
@@ -24,22 +27,23 @@ If you are using WSL, you need to install an xorg server such as [vcXsrv](https:
 # How to use
 The general steps to use the plotter are as follows:
 
-1. Run the server script on the computer that will be used to visualize the data
+1. Run the server.py script on the computer that will be used to visualize the data
 2. Import the client library to (lightly) modify your code so that it can send data to the server
 
 In more detail:
 
-### Step 1: Run the server
+## Step 1: Run the program that visualizes the data (server.py)
 
 To run the server script, you can run the following code in the command line 
 ```python3 -m rtplot.server```
 
 This will open a window which will wait for plots that are sent by a client. This is a convenient setup if you know the IP address of the computer that is running the server. However, if you don't know the IP address, you can specify the ip address of the computer that is sending data (e.g. the client) with the following line:
- ``` python3 server.py -p xxx.xxx.xxx.xxx```
+
+ ``` python3 -m rtplot server.py -p 192.168.1.1```
   
-Where the xxx.xxx.xxx.xxx represents the pi's ip address (note, you must be on the same network) 
+Where the"192.168.1.1" represents the IP address of the computer you want to connect to (note, you must be on the same network).
    
-### Step 2: Modify your code to send data
+## Step 2: Modify your code to send data (use "client" library)
 
 You only need to follow a few steps to update your code to send data to a server
 
@@ -72,43 +76,53 @@ for i in range(1000):
 
 Here is a more detailed explanation of every step
 
-## Step 1: (Optional) Set the IP address of the server
+### Code changes 1: (Optional) Set the IP address of the server
 
 There are three function calls that will allow you to configure the IP address of the plotter
 
 ```client.configure_ip(ip)```
+
 This is the most common function you will use. The ip address is a string in the normal format. For example ```client.configure_ip(192.168.1.1)``` will connect to the computer addressed at 192.168.1.1 on port 5555 by default. You can also specify the port by adding it with a colon. Therefore, ```client.configure_ip(192.168.1.1:1234)``` connects to IP address 192.168.1.1 on port 1234.
 
 ```client.local_plot()```
+
 This will indicate that the server is running in the same machine. It is a shorthand for ```client.configure_ip(127.0.0.1)```
 
 ```client.plot_to_neurobionics_tv()```
+
 This will send data to the TV in the rehab lab bigscreen TV.
 
 
-## Step 2: Send the plot configuration to the server
+ ### Code changes 2: Send the plot configuration to the server
 
 The client specifies what the plot looks like. Therefore, that has to be added to where you send the data. The only function that you need to call is ```client.initialize_plots()```. This function can take in many different arguments to define the look and feel. At the most basic level you can have one plot with one or more traces. However, you can add multiple sub-plots with different amounts of traces in each. Therefore the different ways that you can call ```client.initialize_plots(plot_layout)``` are:
 
-* No argument
+- No argument
+  
 This will intialize the plot to have one subplot with one trace
 
-* Integer
+- Integer
+  
 This will configure one subplot to have the a
 
-* String
+- String
+  
 This will configure the plots to have one subplot with a trace named the same as the string
 
-* List of strings
+- List of strings
+  
 One subplot with as many traces as names in the list, each with the corresponding name.
 
-* List that contains lists of strings
+- List that contains lists of strings
+  
 Same as above, but now with as many subplots as sublists
 
-* Dictionary
+- Dictionary
+  
 One subplot with a more advanced configuration
 
-* List of dictionaries
+- List of dictionaries
+  
 Many subplots, each with an advanced configuration
 
 
@@ -117,46 +131,46 @@ Many subplots, each with an advanced configuration
 You can control the look and feel of the plots by sending a dictionary that contains specific strings as the keys. These are as follows
 
 
-* 'names' - This defines the names of the traces. The plot will have as many traces as names.
+- 'names' - This defines the names of the traces. The plot will have as many traces as names.
 
-* 'colors' - Defines the colors for each trace. [Follow documentation on how to specify color](https://pyqtgraph.readthedocs.io/en/latest/style.html). Should have at least the same length as the number of traces.
+- 'colors' - Defines the colors for each trace. [Follow documentation on how to specify color](https://pyqtgraph.readthedocs.io/en/latest/style.html). Should have at least the same length as the number of traces.
 
-* 'line_style' - Defines wheter or not a trace is dashed or not. 
+- 'line_style' - Defines wheter or not a trace is dashed or not. 
     * '-' - represents dashed line
     * "" - emptry string (or any other string) represents a normal line
 
-* 'line_width' - Defines how thick the plot lines are. Expects an integer
+- 'line_width' - Defines how thick the plot lines are. Expects an integer
 
-* 'title' - Sets the title to the plot
+- 'title' - Sets the title to the plot
 
-* 'ylabel' - Sets the y label of the plot
+- 'ylabel' - Sets the y label of the plot
 
-* 'xlabel' - Sets the x label of the plot
+- 'xlabel' - Sets the x label of the plot
 
-* 'yrange' - Sets the range of values of y. This provides a performance boost to the plotter
+- 'yrange' - Sets the range of values of y. This provides a performance boost to the plotter
    * Expects values as a iterable in the order [min, max]. Example: [-2,2]
 
-* 'xrange' - Sets the number of datapoints that will be in the real time plotter at a given time.
+- 'xrange' - Sets the number of datapoints that will be in the real time plotter at a given time.
    * Expects values as a integer that describes how many datapoints are in the subplot. Default is 200 datapoints
 
 You only need to specify the things that you want, if the dictionary element is left out then the default value is used. 
 
 You can see the [example code](https://github.com/jmontp/rtplot/blob/master/rtplot/example_code.py) to see how these are used.
 
-## Step 3: How to send data
+### Code changes 3: How to send data
 
 To send data to the server, you use the ```client.send_array(arr)``` function. Similar to initialize plots, this function also takes in multiple different argument types:
 
-* Float
+- Float
 When there is only one trace
 
-* List of float
+- List of float
 The length of the list has to equal the total number of traces that are configured for the plot
 
-* 1-d Numpy array
+- 1-d Numpy array
 The size of the numpy array has to be equal to the total number of traces that are configured for the plot
 
-* 2-d Numpy array
+- 2-d Numpy array
 The number of rows must equal the total number of traces. The column can vary in length. The sever will plot as many datapoints as you send in. E.g. the plot will be updated with 10 new points if you have 10 columns. This can make the plot looks less smooth but it will increase performance. More on improving performance later.
 
 # Saving plots
@@ -213,20 +227,18 @@ Where xxx.xxx.xxx.xxx is the IP address of the server.
 
 Even though the plotter is built to be fast, if you have enough traces in the screen it can cause it to slow down. The bottleneck in the code is redrawing the traces. In particular, the amount of pixels it has to redraw will close it down (weird bottleneck, I know). To get around this you can do serveral things to improve the frames per second of the plotter. 
 
-* Plot multiple points at the same time. You can redraw the plot after multiple datapoints instead of updating every single data point. This will cause the plotter to look un-smooth if too many points are sent at the same time. This can be done in one of two ways:
+- Fix y range. The easiest way to get a significant increase in frames per second is to set the 'yrange' configuration of the plot. If you are having slower than desired performance this is the first step I would take. 
 
+- Plot multiple points at the same time. You can redraw the plot after multiple datapoints instead of updating every single data point. This will cause the plotter to look un-smooth if too many points are sent at the same time. This can be done in one of two ways:
+  * Pass in the '-s' flag along with an integer to the server. This will cause the server to skip datapoints between plot refreshing. For example,
+  ```python3 -m rtplot.server -s 5```
+  will refresh the plot once it receives 5 transmissions of data. If you set the -a flag in the server, it will automatically update the skip rate. This is only good to experiment to find the skip rate that works for you and bad if you want the time data to have the correct timestamps since the rate at which you consume data will change. The adapted rate is printed to the terminal
+  
+  * Send a batch of data from the client. Using a 2-d numpy array, the first axis will represent the amount of traces in the plot configuration and the second axis will determine how many datapoints you want to send. The server will automatically determine how much data you are sending. This stacks with the server's '-s' flag. 
 
-** Fix y range. The easiest way to get a significant increase in frames per second is to set the 'yrange' configuration of the plot. If you are having slower than desired performance this is the first step I would take. 
+- Reduce the amount of pixels that you have to plot. If you reduce the size of the plotter window, or reduce the resolution of the monitor. 
 
-** Pass in the '-s' flag along with an integer to the server. This will cause the server to skip datapoints between plot refreshing. For example,
-```python3 -m rtplot.server -s 5```
-will refresh the plot once it receives 5 transmissions of data. If you set the -a flag in the server, it will automatically update the skip rate. This is only good to experiment to find the skip rate that works for you and bad if you want the time data to have the correct timestamps since the rate at which you consume data will change. The adapted rate is printed to the terminal
-
-** Send a batch of data from the client. Using a 2-d numpy array, the first axis will represent the amount of traces in the plot configuration and the second axis will determine how many datapoints you want to send. The server will automatically determine how much data you are sending. This stacks with the server's '-s' flag. 
-
-** Reduce the amount of pixels that you have to plot. If you reduce the size of the plotter window, or reduce the resolution of the monitor. 
-
-** Reduce the line width of the plot. There is an option in the plotter configuration dictionary to increase the line width of each trace. While this makes the lots much easier to read it also makes it much slower. Therefore, keeping the line width at a minimum helps to keep the speed up. 
+- Reduce the line width of the traces. There is an option in the plotter configuration dictionary to increase the line width of each trace. While this makes the lots much easier to read it also makes it much slower. Therefore, keeping the line width at a minimum helps to keep the speed up. 
 
 
 
