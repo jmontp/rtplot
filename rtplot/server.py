@@ -104,6 +104,15 @@ parser.add_argument(
     default=None,
 )
 
+# Make the number of lines that the server plots at the same time be adaptable
+parser.add_argument(
+    "-a",
+    "--adaptable",
+    help='Adjusts how frequently the plotter will refresh the plot in order to consume the incoming data fast enough without filling a buffer.',
+    action="store_true",
+    default=False,
+)
+
 # Read in the arguments
 args = parser.parse_args()
 
@@ -175,6 +184,9 @@ DEBUG_TEXT_ENABLED = args.debug
 
 # Define how many datapoints are skipped
 SKIP_PLOT_DATAPOINTS = args.skip
+
+# Determine if we want to adapt the number of skipped data points
+ADAPT_SKIP_PLOT_DATAPOINTS = args.adaptable
 
 # Define the save directory
 PLOT_SAVE_PATH = args.save_dir
@@ -519,7 +531,7 @@ def initialize_plot(json_config, subplots_to_remove=None):
         # Add the new subplot
         subplots.append(new_plot)
 
-    print("Initialized Plot!")
+    print("Initialized Plot!                 ")
     return (
         traces_per_plot,
         subplots_traces,
@@ -629,11 +641,14 @@ initialized_plot = False
 
 # Create a counter that will be used in case we want to update the plot 
 # every X datapoints
-data_counter = 0
+data_between_plots_refresh = 0
 
 # Create a counter that will be used to determine if the incoming data is 
 # coming in faster than we can process it
 data_rate_counter = 0
+
+# Create a counter between adaptations
+data_between_adaptations = 0
 
 # Main code loop
 while True:
@@ -644,7 +659,13 @@ while True:
     if category == RECEIVED_PLOT_UPDATE:
 
         # Reset the data counter to zero
-        data_counter = 0
+        data_between_plots_refresh = 0
+        data_rate_counter = 0
+        data_between_adaptations = 0
+
+        # If we are adapting the skip points, reset to one
+        if ADAPT_SKIP_PLOT_DATAPOINTS:
+            SKIP_PLOT_DATAPOINTS = 1
 
         # Receive plot configuration
         flags = 0
@@ -756,13 +777,39 @@ while True:
         # Increase the local storage index variable
         li += num_values
 
-        # Update fps in title
-        # First verify if we are plotting slower than we are getting info
+        # Verify if we are processing data faster than we are getting it
         if data_rate_counter < 100:
-            color = "green"
+            # If we have recently taken a break, assume we are good
+            if ADAPT_SKIP_PLOT_DATAPOINTS is True \
+                and data_between_adaptations > 200\
+                and SKIP_PLOT_DATAPOINTS > 1:
+                
+                SKIP_PLOT_DATAPOINTS -= 1
+                print(f"Adapted skip points to be: {SKIP_PLOT_DATAPOINTS}    ",
+                      end="\r")
+                data_between_adaptations = 0
+
+            # Green good
+            title_color = "green"
         else:
-            color = "red"
+            # If we have processed 100 data points without tacking a break, 
+            # assume we are getting overwhelmed. If so, increase the datapoints 
+            # we skip. However, don't skip more than 30% of the datapoints in
+            # the plot since that would be way too choppy
+            skip_points_cutoff = int(num_datapoints_in_plot*0.3)
+            if ADAPT_SKIP_PLOT_DATAPOINTS is True \
+                and data_between_adaptations > 200\
+                and SKIP_PLOT_DATAPOINTS < skip_points_cutoff:
+                
+                SKIP_PLOT_DATAPOINTS += 1
+                print(f"Adapted skip points to be: {SKIP_PLOT_DATAPOINTS}    ",
+                      end="\r")
+                data_between_adaptations = 0
+
+            # Red bad
+            title_color = "red"
         
+        # Update fps in title
         # If we have non-plotting variables, add them the amount to the title
         if num_non_plot_traces > 0:
             non_plot_text = f" - Non Plot Trace: {num_non_plot_traces}"
@@ -772,19 +819,20 @@ while True:
         fps_text = f" - FPS:{fps:.0f}"
         # IF not, don't even include it
         top_plot.setTitle(top_plot_title + non_plot_text + fps_text,
-                            color=color)
+                            color=title_color)
 
         # Update the data counter and data_rate counter
-        data_counter += 1
+        data_between_plots_refresh += 1
         data_rate_counter += 1
+        data_between_adaptations += 1
 
         # If you have reached the number of datapoints to update the plot
         # update the plot
-        if data_counter % SKIP_PLOT_DATAPOINTS == 0:
+        if data_between_plots_refresh % SKIP_PLOT_DATAPOINTS == 0:
             # Indicate you MUST process the plot now
             QtWidgets.QApplication.processEvents()
             # Reset the data counter
-            data_counter = 0
+            data_between_plots_refresh = 0
 
     elif category == SAVE_PLOT:
         #Get the log name

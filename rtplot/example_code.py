@@ -79,7 +79,7 @@ client.initialize_plots(['test 1', 'test2', 'test 5'])
 
 
 #Send 1000 data points
-for i in range(1000):
+for i in range(10000):
 
     #Generate Data -> (This would be your code)
     var1 = np.random.randn()
@@ -94,6 +94,9 @@ for i in range(1000):
 
     #Send data
     client.send_array(data)
+
+    time.sleep(0.001)
+
 
 #------------------------------------------------------------------------------
 
@@ -138,6 +141,7 @@ plot_config1 = {'names' : ['plot1_trace1', 'plot1_trace2'],
                 'title' : "Plot 1 Title",
                 'ylabel': "Plot 1 y label",
                 'xlabel': "Plot 1 x label",
+                'line_width':[2,2],
                 'yrange': [-1,1]
                 }
 
@@ -147,6 +151,7 @@ plot_config2 = {'names' : ['plot2_trace1'],
                 'title' : "Plot 2 Title",
                 'ylabel': "Plot 2 y label",
                 'xlabel': "Plot 2 x label",
+                'line_width':[2],
                 'yrange': [-1,1]
                 }
 
@@ -154,7 +159,7 @@ client.initialize_plots([plot_config1, plot_config2])
 
 
 #Send 1000 data points
-for i in range(1000):
+for i in range(100000):
 
     #Generate Data -> (This would be your code)
     var1 = np.random.randn()
@@ -168,6 +173,8 @@ for i in range(1000):
 
     #Send data
     client.send_array(data)
+
+    time.sleep(1/3000)
 #------------------------------------------------------------------------------
 
 
