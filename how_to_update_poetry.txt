@@ -6,8 +6,13 @@ a. Delete lock file
 b. Run `poetry install --extras "server"`
 c. Resolve potential dependency problems
 
-2. Build package
+2. Update version number in pyproject.toml
+
+3. Build package
 a. Run `poetry build` 
+
+4. Publish package
+a. Run `poetry publish`
 
 # Problem - "Failed to unlock the collection!"
 # Solution -  export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
