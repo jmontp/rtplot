@@ -2,7 +2,8 @@ import zmq
 import numpy as np
 import time
 from collections import OrderedDict
-
+import csv
+from typing import List
 
 ###################
 # ZMQ Networking #
@@ -30,8 +31,6 @@ known_pi_address_prev = True
 # Add flag to indicate if we ever failed to bind
 failed_bind = False
 
-
-
 ## Define the default behaviour of the pi
 
 # Assume that you know the ip address of the pi
@@ -57,6 +56,13 @@ if known_pi_address_prev:
 else:
     #Connect to the computer that will plot information
     socket.connect(prev_address)
+
+
+############################
+# Local plot save config #
+###########################
+local_log_file = None
+csv_writer = None
 
 ############################
 # PyQTgraph Configuration #
@@ -155,6 +161,26 @@ def configure_ip(ip = None, known_pi_address = False, new_bind_address = None):
     #Sleep so that the connection can be established
     time.sleep(1)
 
+def create_local_log(plot_desc_dict:List[dict], log_name:str=None):
+    """Create a current log file based on the data that is sent"""
+    global local_log_file
+    global csv_writer
+    
+    #If we have a local log file, then delete it
+    if local_log_file is not None:
+        local_log_file.close()
+        local_log_file = None
+
+    # Create a new log file with a csv writter object which uses the log_name
+    # argument in conjunction with the timestamp to create a unique log file
+    local_log_file = open(f"{log_name}_{time.time()}.csv", 'w', newline='')
+    csv_writer = csv.writer(local_log_file, delimiter=',',
+                             quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+    # Add the header to the csv file based on the plot description
+    csv_writer.writerow(["Time"] + [name for plot in plot_desc_dict.values() for name in plot["names"]])
+    
+
 
 def send_array(A, flags=0, copy=True, track=False):
     """send a numpy array with metadata
@@ -169,32 +195,39 @@ def send_array(A, flags=0, copy=True, track=False):
     #If you get a float value, convert it to a numpy array
     if(isinstance(A,float) or isinstance(A,list)):
         A = np.array(A).reshape(-1,1)
-
     #If array is one dimensional, reshape to two dimensions
     if(len(A.shape) ==1):
         A = A.reshape(-1,1)
-
     #Create dict to reconstruct array
     md = dict(
         dtype = str(A.dtype),
         shape = A.shape,
     )
-
+    
     #Send category
     socket.send_string(SENDING_DATA)
-    
     #Send json description
     socket.send_json(md, flags | zmq.SNDMORE)
     #Send array
-    return socket.send(A, flags, copy=copy, track=track)
+    socket.send(A, flags, copy=copy, track=track)
+    
+    #If we have a local log file, then save the data
+    if local_log_file is not None:
+        csv_writer.writerow([time.time()] + A.flatten().tolist())
 
 
-def initialize_plots(plot_descriptions=1):
+def initialize_plots(plot_descriptions=1, log_name=None):
     """Send a json description of desired plot
     Inputs
     ------
     plot_description: list of names or list of plot descriptions dictionaries
+        list of names - the names of the plots that you want to create
+        list of plot descriptions - the dictionary of the plot descriptions
+    log_name: string, name of the file that will be stored locally
     """
+    
+    global local_log_file
+    global plot_desc_dict
 
     #Process int inputs
     if isinstance(plot_descriptions,int):
@@ -241,6 +274,10 @@ def initialize_plots(plot_descriptions=1):
     #Send the description
     socket.send_json(plot_desc_dict)
 
+    #If we have a log name, then save the log
+    if log_name is not None:
+        create_local_log(log_name)
+
 
 def save_plot(log_name):
     """
@@ -251,9 +288,11 @@ def save_plot(log_name):
     log_name -- string, name of the file that will be stored
         
     """
-
-    #Indicate that we will send a plot save requset
+    # Indicate that we will send a plot save requset
     socket.send_string(SAVE_PLOT)
 
-    #Send the save plot name
+    # Send the save plot name
     socket.send_string(log_name)
+
+    # Flush the file to ensure that all data is written
+    local_log_file.flush()
