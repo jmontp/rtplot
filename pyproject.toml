@@ -8,13 +8,13 @@ readme = "README.md"
 packages = [{include = "rtplot"}]
 
 [tool.poetry.dependencies]
-python = ">= 3.8, <3.11"
-numpy = "1.23.5"
-pyzmq = "25.0.0"
+python = ">= 3.8"
+numpy = ">= 1.23.5"
+pyzmq = ">= 25.0.0"
 
-pandas = {version = "1.5.3", optional = true}
-pyarrow = {version="11.0.0", optional = true}
-pyqtgraph = {version = "0.13.0", optional = true}
+pandas = {version = ">= 1.5.3", optional = true}
+pyarrow = {version=">= 11.0.0", optional = true}
+pyqtgraph = {version = ">= 0.13.0", optional = true}
 pyside6 = {version = "<= 6.4.0", optional = true}
 
 [tool.poetry.extras]
