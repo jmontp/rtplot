@@ -1,0 +1,13 @@
+This is just a quick reminder of how to update this package for pip
+
+
+1. Verify that the dependencies work
+a. Delete lock file
+b. Run `poetry install --extras "server"`
+c. Resolve potential dependency problems
+
+2. Build package
+a. Run `poetry build` 
+
+# Problem - "Failed to unlock the collection!"
+# Solution -  export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
