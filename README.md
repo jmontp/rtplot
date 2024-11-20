@@ -20,7 +20,7 @@ To install just the client (can only send data)
 
 To install the client and the dependencies for the server. This is not recommended for smaller devices since some dependencies are large.
 
-```pip install better-rtplot[server]```
+```pip install "better-rtplot[server]"```
 
 If you are using WSL, you need to install an xorg server such as [vcXsrv](https://sourceforge.net/projects/vcxsrv/) to see the plot. However, this should run in a native windows install of python.
 
