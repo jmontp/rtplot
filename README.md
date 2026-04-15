@@ -35,9 +35,11 @@ laptop on the same network.
 
 ## Highlights
 
-- **Fast.** Binary WebSocket deltas push data at up to 1 kHz, with
-  uPlot rendering the browser-side traces at 60 Hz. Easily handles
-  hundreds of frames per second on a single trace.
+- **Fast.** Binary WebSocket deltas push data at up to 1 kHz. The
+  browser coalesces incoming samples into a single repaint per
+  `requestAnimationFrame`, so rendering runs at your monitor's refresh
+  rate (typically 60 Hz, 120 Hz on higher-refresh displays) regardless
+  of how fast samples arrive.
 - **Browser-based.** The plot window is served by aiohttp and rendered
   by uPlot in any modern browser. No desktop GUI toolkit to install,
   works over SSH port forwarding out of the box.
