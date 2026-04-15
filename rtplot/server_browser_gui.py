@@ -267,6 +267,55 @@ def _demo_sender_loop(rtp_client, stop_event, stats):
         _log("demo sender loop crashed: " + traceback.format_exc())
 
 
+def _normalize_demo_target(raw: str):
+    """Normalize a user-entered target host string into a ZMQ-friendly form.
+
+    The most common mistake is pasting the browser URL from the server
+    status window (e.g. ``http://192.168.1.42:8050``) into the target
+    field. That hands ``http://...:8050`` to pyzmq, which rejects the
+    scheme and, on a retry, connects to the aiohttp HTTP port instead
+    of the real ZMQ SUB port 5555 — data goes into the void with no
+    visible error.
+
+    Returns ``(cleaned, warning)`` where ``warning`` is None if no
+    auto-correction was applied, or a short human-readable explanation
+    of what was fixed otherwise.
+    """
+    import re
+
+    warnings = []
+    s = raw.strip().rstrip("/")
+
+    # 1. Strip http:// or https:// prefix
+    if s.lower().startswith("http://"):
+        s = s[len("http://"):]
+        warnings.append("stripped 'http://' prefix")
+    elif s.lower().startswith("https://"):
+        s = s[len("https://"):]
+        warnings.append("stripped 'https://' prefix")
+
+    # 2. Strip any path after the host (e.g. http://host:8050/index)
+    if "/" in s:
+        s = s.split("/", 1)[0]
+
+    # 3. If the port is obviously the HTTP port, retarget to the ZMQ port.
+    #    The rtplot server's default HTTP port is 8050; the default ZMQ
+    #    data port is 5555.
+    m = re.match(r"^(.+):(\d+)$", s)
+    if m:
+        host, port_str = m.group(1), m.group(2)
+        try:
+            port = int(port_str)
+        except ValueError:
+            port = -1
+        if port in (80, 443, 8050, 8051, 8080, 8000):
+            s = host
+            warnings.append(f"dropped HTTP port :{port} (ZMQ defaults to 5555)")
+
+    warning = "; ".join(warnings) if warnings else None
+    return s, warning
+
+
 def _configure_demo_sender(rtp_client, target: str, source_label: str):
     """Configure rtplot.client for ``target`` and push the demo layout.
 
@@ -572,8 +621,23 @@ def _run_with_gui(args, rest):
         if demo_state["running"]:
             return
         target_raw = target_var.get().strip()
-        target = target_raw or "127.0.0.1"
-        demo_status_var.set(f"importing rtplot.client…")
+
+        # Normalize the user's input: strip http:// prefix, drop HTTP
+        # ports (8050/80/443/...) and let the ZMQ default of 5555 win.
+        # If the target is blank, default to localhost.
+        if target_raw:
+            target, warn = _normalize_demo_target(target_raw)
+            if not target:
+                target = "127.0.0.1"
+            if warn:
+                _log(f"demo sender: target normalized: {target_raw!r} -> {target!r} ({warn})")
+                # Echo the cleaned value back into the entry so next click
+                # is already clean and the user sees what we did.
+                target_var.set(target)
+        else:
+            target = "127.0.0.1"
+
+        demo_status_var.set("importing rtplot.client…")
         _log(f"demo sender: start requested, target={target}")
         try:
             if demo_state["client"] is None:
@@ -599,10 +663,12 @@ def _run_with_gui(args, rest):
             demo_status_var.set(f"error: {err}")
             return
 
-        # Only persist the host the user explicitly typed (don't pollute
-        # the dropdown with literal "127.0.0.1" when they left it blank).
+        # Persist the cleaned host (not the raw user input) so the
+        # dropdown contains the canonical form for next time. Skip if
+        # the user left it blank — we don't want "127.0.0.1" in the
+        # dropdown as an "entry".
         if target_raw:
-            _remember_host(settings, target_raw)
+            _remember_host(settings, target)
             target_entry.configure(values=settings.get("recent_hosts", []))
 
         _log(f"demo sender: starting sender thread")
@@ -666,9 +732,11 @@ def _run_with_gui(args, rest):
         width=22,
     )
     target_entry.pack(side="left", padx=(0, 6))
-    ttk.Label(target_row, text="(blank = localhost)", foreground="#888").pack(
-        side="left"
-    )
+    ttk.Label(
+        target_row,
+        text="host or host:5555 (blank = localhost)",
+        foreground="#888",
+    ).pack(side="left")
     # target_row starts hidden
 
     def poll_demo_stats():
@@ -831,7 +899,12 @@ def _run_test_client(args, rest):
     import tkinter as tk
     from tkinter import ttk
 
-    target = args.test_client
+    target_raw = args.test_client
+    target, warn = _normalize_demo_target(target_raw)
+    if not target:
+        target = "127.0.0.1"
+    if warn:
+        _log(f"test-client target normalized: {target_raw!r} -> {target!r} ({warn})")
     _log(f"starting test-client mode target={target}")
 
     log_redirect = _TkLogRedirect()
