@@ -18,8 +18,40 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 import threading
+import traceback
 import webbrowser
+from datetime import datetime
+
+# Everything the GUI wrapper does gets mirrored to a log file in the
+# user's TEMP directory. This is the only reliable way to diagnose a
+# failed double-click on Windows — the console window closes
+# instantly on exit, so stderr tracebacks are invisible.
+LOG_FILE = os.path.join(tempfile.gettempdir(), "rtplot-server.log")
+
+
+def _log(message: str) -> None:
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as fh:
+            fh.write(f"[{datetime.now().isoformat(timespec='seconds')}] {message}\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _show_error_dialog(title: str, message: str) -> None:
+    """Show a modal error dialog. Best-effort — falls back to stderr."""
+    _log(f"ERROR {title}: {message}")
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(title, message)
+        root.destroy()
+    except Exception:  # noqa: BLE001
+        sys.stderr.write(f"\n{title}\n{message}\n")
 
 
 def _lan_ips():
@@ -83,11 +115,26 @@ def _run_headless(args, rest):
     runpy.run_module("rtplot.server_browser", run_name="__main__")
 
 
+def _port_conflict_message(exc: Exception, args) -> str:
+    return (
+        f"rtplot-server could not start:\n\n{exc}\n\n"
+        f"The most common cause is another process already using one of:\n"
+        f"  • TCP {args.port} (HTTP)\n"
+        f"  • TCP 5555 (ZMQ data)\n"
+        f"  • TCP 5556 (ZMQ control)\n\n"
+        "Check Task Manager for a stray rtplot-server.exe, or shut down\n"
+        "any WSL/other Python process hosting an rtplot server.\n\n"
+        f"A detailed log has been written to:\n{LOG_FILE}"
+    )
+
+
 def _run_with_gui(args, rest):
     import asyncio
     import tkinter as tk
     from tkinter import ttk
     from aiohttp import web
+
+    _log(f"starting GUI mode port={args.port} host={args.host} pi_ip={args.pi_ip}")
 
     # Seed sys.argv so server_browser's module-level argparse sees what we
     # want. --no-browser is always forced in GUI mode because the window
@@ -105,7 +152,16 @@ def _run_with_gui(args, rest):
     forwarded += rest
     sys.argv = forwarded
 
-    from rtplot import server_browser as sb  # noqa: E402 — deliberate post-argv import
+    # server_browser binds ZMQ sockets at import time. If those binds
+    # fail (port already in use) the import itself throws and we never
+    # get to the Tk window. Catch it and pop up a dialog explaining
+    # what happened instead of silently closing the console.
+    try:
+        from rtplot import server_browser as sb  # noqa: E402
+    except Exception as exc:  # noqa: BLE001
+        _log("server_browser import failed: " + traceback.format_exc())
+        _show_error_dialog("rtplot-server", _port_conflict_message(exc, args))
+        return
 
     # Start the aiohttp server in a background thread with its own event
     # loop. web.run_app() can't be called off the main thread because it
@@ -122,9 +178,11 @@ def _run_with_gui(args, rest):
             loop.run_until_complete(runner.setup())
             site = web.TCPSite(runner, args.host, args.port)
             loop.run_until_complete(site.start())
+            _log(f"http listening on {args.host}:{args.port}")
             server_ready.set()
             loop.run_forever()
         except Exception as exc:  # noqa: BLE001
+            _log("server thread crashed: " + traceback.format_exc())
             startup_error["value"] = exc
             server_ready.set()
 
@@ -132,12 +190,17 @@ def _run_with_gui(args, rest):
     thread.start()
     server_ready.wait(timeout=8)
     if startup_error["value"] is not None:
-        # Fail loudly — a failed bind is the most common cause.
-        import traceback
-
-        traceback.print_exception(startup_error["value"])
-        sys.stderr.write(f"\nrtplot-server failed to start: {startup_error['value']}\n")
-        sys.exit(1)
+        _show_error_dialog(
+            "rtplot-server", _port_conflict_message(startup_error["value"], args)
+        )
+        return
+    if not server_ready.is_set():
+        _show_error_dialog(
+            "rtplot-server",
+            "rtplot-server did not become ready within 8 seconds.\n\n"
+            f"See the log at:\n{LOG_FILE}",
+        )
+        return
 
     # ---------------------------------------------------------------- UI
     root = tk.Tk()
@@ -228,11 +291,23 @@ def _run_with_gui(args, rest):
 
 
 def main():
-    args, rest = _parse_wrapper_args(sys.argv[1:])
-    if args.no_gui:
-        _run_headless(args, rest)
-    else:
-        _run_with_gui(args, rest)
+    _log("=" * 60)
+    _log(f"rtplot-server started argv={sys.argv}")
+    try:
+        args, rest = _parse_wrapper_args(sys.argv[1:])
+        if args.no_gui:
+            _run_headless(args, rest)
+        else:
+            _run_with_gui(args, rest)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _log("unhandled error: " + traceback.format_exc())
+        _show_error_dialog(
+            "rtplot-server",
+            f"Unexpected error:\n\n{exc}\n\nA log has been written to:\n{LOG_FILE}",
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

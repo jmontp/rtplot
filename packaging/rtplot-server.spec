@@ -41,6 +41,7 @@ a = Analysis(
         "rtplot.server_browser",
         "tkinter",
         "tkinter.ttk",
+        "tkinter.messagebox",
     ],
     hookspath=[],
     hooksconfig={},
