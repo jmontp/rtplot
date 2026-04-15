@@ -4,12 +4,14 @@
 # Build from the repo root with:
 #     pyinstaller packaging/rtplot-server.spec --noconfirm
 #
-# The output lands in `dist/rtplot-server/` as a onedir bundle whose
-# top-level exe is `rtplot-server.exe`. onefile is intentionally NOT used
-# — onefile binaries extract to a temp dir on every launch (slow) and
-# Windows Defender tends to flag them as packed malware. onedir avoids
-# both problems at the cost of shipping a folder of DLLs alongside the
-# exe.
+# The output is a single self-contained `dist/rtplot-server.exe`. This
+# is onefile mode: on first launch the bootloader extracts the bundled
+# payload to %TEMP%\_MEIxxxxxx\ (takes ~2-4s on a cold disk) and then
+# runs from there. onefile makes distribution much easier — the whole
+# server is a single file you can drop in an email or share link —
+# at the cost of that one-time extraction delay and occasional extra
+# scrutiny from heuristic antivirus scanners that dislike packed
+# executables.
 
 import os
 
@@ -74,8 +76,10 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
     name="rtplot-server",
     debug=False,
     bootloader_ignore_signals=False,
@@ -83,21 +87,11 @@ exe = EXE(
     # UPX compression is optional; disable for now because it slows
     # builds and some antivirus products dislike UPX-packed binaries.
     upx=False,
+    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name="rtplot-server",
 )

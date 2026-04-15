@@ -44,23 +44,23 @@ jobs:
           echo "version=$version" >> $env:GITHUB_OUTPUT
           echo "Building rtplot-server $version"
 
-      - name: Package onedir output as zip
+      - name: Rename onefile exe for release
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          $zipName = "rtplot-server-$version-windows-x64.zip"
-          Compress-Archive -Path dist/rtplot-server -DestinationPath "dist/$zipName"
-          echo "Produced dist/$zipName"
+          $exeName = "rtplot-server-$version-windows-x64.exe"
+          Copy-Item dist/rtplot-server.exe "dist/$exeName"
+          echo "Produced dist/$exeName"
 
       - name: Upload as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: rtplot-server-windows
-          path: dist/rtplot-server-*-windows-x64.zip
+          path: dist/rtplot-server-*-windows-x64.exe
 
       - name: Attach to GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/rtplot-server-*-windows-x64.zip
+          files: dist/rtplot-server-*-windows-x64.exe
           fail_on_unmatched_files: true
