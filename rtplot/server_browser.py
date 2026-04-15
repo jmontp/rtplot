@@ -734,16 +734,49 @@ async def reconfigure_zmq(app, connect_ip=None):
     except Exception:  # noqa: BLE001
         pass
 
-    try:
-        zmq_socket = _open_zmq_socket(connect_ip=connect_ip)
-    except Exception as exc:  # noqa: BLE001
-        # Fall back to bind so the server keeps running and tell the browser.
-        print(f"ZMQ reconfigure failed ({exc}); falling back to bind")
-        zmq_socket = _open_zmq_socket(connect_ip=None)
-        connect_ip = None
+    # Give the OS a moment to release the freed TCP ports before we try
+    # to re-bind them. Linux usually releases immediately; Windows can
+    # hold on briefly even with linger=0, which caused "Bind doesn't work"
+    # reports in the exe. 150 ms is empirically enough in both cases.
+    await asyncio.sleep(0.15)
+
+    # Retry the open with a small backoff in case the OS is still
+    # releasing the port. Three quick attempts cover the typical Windows
+    # rebind race without making the UI feel sluggish.
+    def _try_open_zmq(ip):
+        last_exc = None
+        for attempt in range(3):
+            try:
+                return _open_zmq_socket(connect_ip=ip)
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                print(f"ZMQ open failed (attempt {attempt + 1}/3): {exc}")
+                time.sleep(0.1 * (attempt + 1))
+        raise last_exc if last_exc else RuntimeError("zmq open failed")
+
+    def _try_open_control(ip):
+        last_exc = None
+        for attempt in range(3):
+            try:
+                return _open_control_socket(connect_ip=ip)
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                print(f"ZMQ control open failed (attempt {attempt + 1}/3): {exc}")
+                time.sleep(0.1 * (attempt + 1))
+        raise last_exc if last_exc else RuntimeError("zmq control open failed")
 
     try:
-        control_push_socket = _open_control_socket(connect_ip=connect_ip)
+        zmq_socket = _try_open_zmq(connect_ip)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ZMQ reconfigure failed ({exc}); keeping previous state")
+        # Leave zmq_status pointing at whatever the caller asked for so
+        # the browser knows the new intent; the zmq_socket global may be
+        # in a partially-closed state but we'll retry on the next click.
+        await broadcast_zmq_status()
+        return
+
+    try:
+        control_push_socket = _try_open_control(connect_ip)
     except Exception as exc:  # noqa: BLE001
         print(f"ZMQ control reconfigure failed ({exc}); control channel offline")
         control_push_socket = None
@@ -837,6 +870,11 @@ INDEX_HTML = """<!doctype html>
   #status.green { background: #d4f5d4; color: #186a18; }
   #status.red { background: #f9d4d4; color: #8a1a1a; }
   .btn { padding: 6px 12px; font-size: calc(14px * var(--ui-scale)); border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; }
+  /* zmq mode buttons: the currently-active mode is green + not clickable, the other is white + clickable */
+  .btn.zmq-active { background: #d4f5d4; color: #186a18; border-color: #8dc88d; cursor: default; }
+  .btn.zmq-active:hover { background: #d4f5d4; }
+  .btn.zmq-disabled { background: #f0f0f0; color: #aaa; border-color: #ccc; cursor: not-allowed; }
+  .btn.zmq-disabled:hover { background: #f0f0f0; }
   .btn:hover { background: #f0f0f0; }
   #ip-input { padding: 6px 8px; font-size: calc(13px * var(--ui-scale)); border: 1px solid #888; border-radius: 4px; width: 170px; font-family: monospace; }
   #zmq-mode { font-size: calc(12px * var(--ui-scale)); color: #555; padding: 2px 8px; background: #eef; border-radius: 4px; }
@@ -1671,6 +1709,20 @@ INDEX_HTML = """<!doctype html>
         } else {
           zmqMode.textContent = 'ZMQ: --';
         }
+        // Color-code the two mode buttons: the currently-active mode is
+        // green and non-clickable (clicking it again would be a no-op);
+        // the other is plain white and clickable so users can see at a
+        // glance which action is available.
+        bindBtn.classList.remove('zmq-active', 'zmq-disabled');
+        connectBtn.classList.remove('zmq-active', 'zmq-disabled');
+        if (mode === 'bind') {
+          bindBtn.classList.add('zmq-active');
+          // Clear the IP field so the user can type a fresh target
+          // without having to manually erase the old value.
+          ipInput.value = '';
+        } else if (mode === 'connect') {
+          connectBtn.classList.add('zmq-active');
+        }
       }
 
       function connect() {
@@ -1710,8 +1762,14 @@ INDEX_HTML = """<!doctype html>
       });
 
       connectBtn.addEventListener('click', () => {
+        // Already in connect mode — clicking again is a no-op unless
+        // the user has typed a DIFFERENT IP into the input.
         const ip = ipInput.value.trim();
         if (!ip) { ipInput.focus(); return; }
+        if (connectBtn.classList.contains('zmq-active')) {
+          // Allow re-connecting to a different host while already in
+          // connect mode (retarget). Fall through to send the message.
+        }
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: 'configure_ip', ip: ip }));
         }
@@ -1722,6 +1780,8 @@ INDEX_HTML = """<!doctype html>
       });
 
       bindBtn.addEventListener('click', () => {
+        // Binding twice is a no-op; skip the WS round trip.
+        if (bindBtn.classList.contains('zmq-active')) return;
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: 'bind' }));
         }
@@ -1795,9 +1855,15 @@ async def handle_ws(request):
                 elif ptype == "configure_ip":
                     ip = payload.get("ip")
                     if ip:
-                        await reconfigure_zmq(request.app, connect_ip=ip)
+                        try:
+                            await reconfigure_zmq(request.app, connect_ip=ip)
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"[rtplot] configure_ip failed: {exc}")
                 elif ptype == "bind":
-                    await reconfigure_zmq(request.app, connect_ip=None)
+                    try:
+                        await reconfigure_zmq(request.app, connect_ip=None)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[rtplot] bind failed: {exc}")
                 elif ptype == "control_button":
                     btn_id = payload.get("id")
                     if btn_id:
