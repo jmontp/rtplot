@@ -39,6 +39,7 @@ a = Analysis(
         "zmq.asyncio",
         "numpy",
         "rtplot.server_browser",
+        "rtplot.client",
         "tkinter",
         "tkinter.ttk",
         "tkinter.messagebox",

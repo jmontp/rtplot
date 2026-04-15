@@ -132,6 +132,19 @@ def _parse_wrapper_args(argv):
         default="0.0.0.0",
         help="HTTP bind interface (default 0.0.0.0)",
     )
+    parser.add_argument(
+        "--test-client",
+        dest="test_client",
+        default=None,
+        metavar="TARGET",
+        help=(
+            "Run the exe as a demo data sender instead of a server. "
+            "TARGET is the 'host' or 'host:port' of the machine running "
+            "the rtplot server you want to test connectivity with. "
+            "Useful for verifying cross-PC networking from a second "
+            "machine that only has the exe (no Python install)."
+        ),
+    )
     args, rest = parser.parse_known_args(argv)
     return args, rest
 
@@ -437,12 +450,165 @@ def _run_with_gui(args, rest):
     root.mainloop()
 
 
+def _run_test_client(args, rest):
+    """Send a demo sine wave to a remote rtplot server.
+
+    Provides a zero-Python way to smoke-test cross-PC connectivity:
+    on the viewing PC, run the server exe; on the sending PC, run
+    ``rtplot-server.exe --test-client <viewing-pc-ip>``. A small Tk
+    window appears showing how many samples have been sent so the
+    user knows the connection is alive even before they look at the
+    server's browser page.
+    """
+    import math
+    import time
+    import tkinter as tk
+    from tkinter import ttk
+
+    target = args.test_client
+    _log(f"starting test-client mode target={target}")
+
+    # Install log redirect + blank Tk early so any import / connect
+    # failure below still surfaces in a visible dialog.
+    log_redirect = _TkLogRedirect()
+    sys.stdout = log_redirect
+    sys.stderr = log_redirect
+
+    try:
+        from rtplot import client as rtp_client
+    except Exception as exc:  # noqa: BLE001
+        _log("client import failed: " + traceback.format_exc())
+        _show_error_dialog(
+            "rtplot test client",
+            f"Failed to import rtplot.client:\n\n{exc}\n\nSee {LOG_FILE}",
+        )
+        return
+
+    try:
+        rtp_client.configure_ip(target)
+    except Exception as exc:  # noqa: BLE001
+        _log("configure_ip failed: " + traceback.format_exc())
+        _show_error_dialog(
+            "rtplot test client",
+            f"Could not configure target '{target}':\n\n{exc}\n\n"
+            "Check the host is reachable (ping it) and that the\n"
+            "rtplot-server is running there on the default ZMQ port (5555).",
+        )
+        return
+
+    plot_cfg = {
+        "names": ["test-signal"],
+        "colors": ["b"],
+        "yrange": [-1.5, 1.5],
+        "title": f"rtplot test client",
+        "xrange": 500,
+    }
+    controls_row = {
+        "controls": [
+            {"type": "text", "id": "source", "label": "From",
+             "value": f"test client at localhost"},
+            {"type": "display", "id": "count", "label": "sent", "format": "{:.0f}"},
+            {"type": "button", "id": "ack", "label": "Ack"},
+        ],
+    }
+    try:
+        rtp_client.initialize_plots([plot_cfg, controls_row])
+        print(f"initialized remote plot on {target}")
+    except Exception as exc:  # noqa: BLE001
+        _log("initialize_plots failed: " + traceback.format_exc())
+        _show_error_dialog(
+            "rtplot test client",
+            f"Failed to initialize remote plot:\n\n{exc}\n\nSee {LOG_FILE}",
+        )
+        return
+
+    # ---- Tk status window
+    root = tk.Tk()
+    root.title("rtplot test client")
+    root.resizable(False, False)
+
+    frame = ttk.Frame(root, padding=16)
+    frame.pack(fill="both", expand=True)
+
+    ttk.Label(
+        frame,
+        text="rtplot test client",
+        font=("Segoe UI", 13, "bold"),
+    ).pack(anchor="w")
+    ttk.Label(
+        frame,
+        text=f"Sending demo data to  {target}",
+        foreground="#555",
+    ).pack(anchor="w", pady=(0, 10))
+    ttk.Label(
+        frame,
+        text=(
+            "Open the rtplot server's browser on the target machine\n"
+            "— you should see a 1.5 Hz sine wave streaming in."
+        ),
+        foreground="#555",
+    ).pack(anchor="w", pady=(0, 10))
+
+    count_var = tk.StringVar(value="0 samples sent")
+    elapsed_var = tk.StringVar(value="elapsed 0.0 s")
+    ttk.Label(frame, textvariable=count_var).pack(anchor="w")
+    ttk.Label(frame, textvariable=elapsed_var).pack(anchor="w", pady=(0, 12))
+
+    stop_event = threading.Event()
+    stats = {"count": 0, "elapsed": 0.0, "error": None}
+
+    def sender_loop():
+        t0 = time.time()
+        i = 0
+        try:
+            while not stop_event.is_set():
+                t = time.time() - t0
+                val = math.sin(2 * math.pi * 1.5 * t)
+                rtp_client.send_array(val)
+                rtp_client.set_display("count", float(i))
+                i += 1
+                stats["count"] = i
+                stats["elapsed"] = t
+                time.sleep(0.02)
+        except Exception as exc:  # noqa: BLE001
+            stats["error"] = exc
+            _log("sender loop crashed: " + traceback.format_exc())
+
+    sender_thread = threading.Thread(target=sender_loop, daemon=True)
+    sender_thread.start()
+
+    def poll_stats():
+        if stats["error"] is not None:
+            count_var.set(f"ERROR: {stats['error']}")
+        else:
+            count_var.set(f"{stats['count']} samples sent")
+            elapsed_var.set(f"elapsed {stats['elapsed']:.1f} s")
+        root.after(200, poll_stats)
+
+    poll_stats()
+
+    def on_stop():
+        stop_event.set()
+        try:
+            sender_thread.join(timeout=1)
+        except Exception:  # noqa: BLE001
+            pass
+        root.destroy()
+        os._exit(0)
+
+    ttk.Button(frame, text="Stop and close", command=on_stop).pack(anchor="w")
+    root.protocol("WM_DELETE_WINDOW", on_stop)
+    root.mainloop()
+
+
 def main():
     _log("=" * 60)
     _log(f"rtplot-server started argv={sys.argv}")
     try:
         args, rest = _parse_wrapper_args(sys.argv[1:])
-        if args.no_gui:
+        if args.test_client:
+            _run_test_client(args, rest)
+        elif args.no_gui:
             _run_headless(args, rest)
         else:
             _run_with_gui(args, rest)
