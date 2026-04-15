@@ -27,6 +27,7 @@ laptop on the same network.
 - [Sending data](#sending-data)
 - [Saving data](#saving-data)
 - [Networking modes](#networking-modes)
+- [Viewing the plot from another device](#viewing-the-plot-from-another-device)
 - [Performance tuning](#performance-tuning)
 - [CLI reference](#cli-reference)
 - [Examples](#examples)
@@ -336,6 +337,124 @@ If you pass `-p host:port` to the server, rtplot also derives the control
 return-channel endpoint from that same host/port (it uses `port+1`). This
 means sliders, buttons, and dials work transparently in both modes with
 no extra config.
+
+---
+
+## Viewing the plot from another device
+
+The section above is about the link between your *sender script* and the
+*plot host* (the machine running `rtplot.server_browser`). This section
+is about the other relationship: the link between the plot host and a
+separate *viewer device* — a phone, tablet, or another laptop that just
+wants to open the browser UI.
+
+**You don't need SSH for this.** The plot host already runs a plain HTTP
+server on port `8050`, bound to every interface, and the viewer device
+is only a web browser. All you need to do is get traffic from the
+viewer to port `8050` on the plot host.
+
+### On the same LAN (phone, tablet, another laptop on the same Wi-Fi)
+
+1. Find the plot host's LAN IP:
+
+   ```powershell
+   ipconfig | findstr IPv4       # Windows
+   ```
+   ```bash
+   ip -4 addr | grep inet        # Linux/WSL
+   ```
+
+2. Open `http://<lan_ip>:8050` in the browser on the viewer device.
+
+3. If Windows, allow inbound connections on port `8050` through Windows
+   Defender Firewall. The very first time you run
+   `python -m rtplot.server_browser`, Windows pops up an "Allow Python to
+   receive connections" dialog — tick **Private networks** and click
+   **Allow**. If you missed the dialog, add the rule manually from an
+   elevated PowerShell:
+
+   ```powershell
+   # PowerShell as Administrator
+   New-NetFirewallRule -DisplayName "rtplot" `
+       -Direction Inbound -LocalPort 8050 -Protocol TCP `
+       -Action Allow -Profile Private
+   ```
+
+   Only allow on **Private** (home / trusted Wi-Fi), not **Public**,
+   unless you know what you're doing. To remove the rule later:
+
+   ```powershell
+   Remove-NetFirewallRule -DisplayName "rtplot"
+   ```
+
+No router configuration, no SSH tunneling, no external accounts. Just a
+firewall exception.
+
+### WSL2 wrinkle
+
+If you run the server inside WSL2 instead of native Windows, WSL2's
+`localhost` auto-forward lets **you** reach it from your Windows browser,
+but does **not** forward traffic from the LAN. To expose a WSL2-hosted
+server to other devices you need one extra hop — a Windows-side port
+proxy that forwards incoming LAN traffic into WSL2:
+
+```powershell
+# PowerShell as Administrator
+$wslIp = (wsl hostname -I).Trim().Split()[0]
+netsh interface portproxy add v4tov4 `
+    listenport=8050 listenaddress=0.0.0.0 `
+    connectport=8050 connectaddress=$wslIp
+New-NetFirewallRule -DisplayName "rtplot wsl" `
+    -Direction Inbound -LocalPort 8050 -Protocol TCP `
+    -Action Allow -Profile Private
+```
+
+WSL2's IP changes on every reboot, so rerun the `netsh` line after a
+restart (or just run `rtplot.server_browser` from native Windows and
+skip this whole step).
+
+To undo:
+```powershell
+netsh interface portproxy delete v4tov4 listenport=8050 listenaddress=0.0.0.0
+Remove-NetFirewallRule -DisplayName "rtplot wsl"
+```
+
+### Across the internet (viewer on cellular, another network, etc.)
+
+Two easy options, neither of which requires touching your router:
+
+**Cloudflare Tunnel** (free, one-shot URL):
+
+```powershell
+winget install --id Cloudflare.cloudflared
+cloudflared tunnel --url http://localhost:8050
+```
+
+Prints an `https://<random>.trycloudflare.com` URL valid for the
+lifetime of the command — paste it into the viewer's browser. Kill the
+command when you're done.
+
+**Tailscale** (private mesh VPN, best for recurring setups):
+
+Install [Tailscale](https://tailscale.com) on both the plot host and
+every viewer device. Each device gets a stable `100.x.y.z` IP that
+works from any network. Open `http://100.x.y.z:8050` on the viewer.
+
+Both tunnel paths forward the HTTP + WebSocket traffic that the browser
+needs; neither involves ZMQ, since the viewer is browser-only. Your
+sender script keeps talking to the plot host locally as usual.
+
+### Ports at a glance
+
+| Port | What it's for | Who actually needs it open |
+|---|---|---|
+| `8050` (TCP) | HTTP + WebSocket to the browser UI | the plot host, inbound from viewers |
+| `5555` (TCP) | ZMQ data (sender → server) | only the sender and the plot host |
+| `5556` (TCP) | ZMQ control return channel (server → sender) | only the sender and the plot host |
+
+For the "other device is a viewer" case, you only need to expose `8050`.
+`5555` / `5556` are between the sender script and the plot host — they
+do not need to be reachable from the viewer device at all.
 
 ---
 
