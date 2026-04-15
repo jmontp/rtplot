@@ -16,13 +16,46 @@ server starts with auto-browser-open disabled (the GUI has its own
 from __future__ import annotations
 
 import argparse
+import io
 import os
+import queue
 import sys
 import tempfile
 import threading
 import traceback
 import webbrowser
 from datetime import datetime
+
+
+class _TkLogRedirect(io.TextIOBase):
+    """Thread-safe sys.stdout / sys.stderr replacement.
+
+    Writes are buffered in a queue and mirrored to the persistent log
+    file, then drained onto the Tk log panel by a periodic pump running
+    on the main thread. Installing this before importing
+    rtplot.server_browser captures the server's startup prints too.
+    """
+
+    def __init__(self):
+        self.queue: "queue.Queue[str]" = queue.Queue()
+
+    def writable(self):
+        return True
+
+    def write(self, s):
+        if not s:
+            return 0
+        try:
+            self.queue.put_nowait(s)
+        except Exception:  # noqa: BLE001
+            pass
+        for line in s.splitlines():
+            if line.strip():
+                _log("OUT " + line.rstrip())
+        return len(s)
+
+    def flush(self):
+        pass
 
 # Everything the GUI wrapper does gets mirrored to a log file in the
 # user's TEMP directory. This is the only reliable way to diagnose a
@@ -136,6 +169,13 @@ def _run_with_gui(args, rest):
 
     _log(f"starting GUI mode port={args.port} host={args.host} pi_ip={args.pi_ip}")
 
+    # Install the log redirect BEFORE importing server_browser so the
+    # module-level prints ("ZMQ: bound on tcp://*:5555", etc.) land in
+    # our buffer and eventually on the collapsable log panel.
+    log_redirect = _TkLogRedirect()
+    sys.stdout = log_redirect
+    sys.stderr = log_redirect
+
     # Seed sys.argv so server_browser's module-level argparse sees what we
     # want. --no-browser is always forced in GUI mode because the window
     # has its own "Open in browser" button.
@@ -178,7 +218,7 @@ def _run_with_gui(args, rest):
             loop.run_until_complete(runner.setup())
             site = web.TCPSite(runner, args.host, args.port)
             loop.run_until_complete(site.start())
-            _log(f"http listening on {args.host}:{args.port}")
+            print(f"http listening on {args.host}:{args.port}")
             server_ready.set()
             loop.run_forever()
         except Exception as exc:  # noqa: BLE001
@@ -205,7 +245,6 @@ def _run_with_gui(args, rest):
     # ---------------------------------------------------------------- UI
     root = tk.Tk()
     root.title("rtplot server")
-    root.geometry("440x260")
     root.resizable(False, False)
 
     try:
@@ -213,6 +252,48 @@ def _run_with_gui(args, rest):
         style.theme_use("vista" if "vista" in style.theme_names() else "clam")
     except tk.TclError:
         pass
+
+    # A borderless ttk.Entry looks like a label but its text is
+    # OS-selectable — click-drag to select, Ctrl+C to copy.
+    bg = "#f0f0f0"
+    try:
+        bg = style.lookup("TFrame", "background") or bg
+    except tk.TclError:
+        pass
+    style.configure(
+        "Selectable.TEntry",
+        fieldbackground=bg,
+        background=bg,
+        borderwidth=0,
+        relief="flat",
+        padding=0,
+        foreground="#555",
+    )
+    style.configure(
+        "Strong.TEntry",
+        fieldbackground=bg,
+        background=bg,
+        borderwidth=0,
+        relief="flat",
+        padding=0,
+        foreground="#186a18",
+    )
+
+    def _selectable_entry(parent, var, style_name="Selectable.TEntry", **kwargs):
+        e = ttk.Entry(
+            parent, textvariable=var, style=style_name, takefocus=0, **kwargs
+        )
+        # Block editing but keep selection + Ctrl+C working. Returning
+        # "break" stops the default text-edit handlers, but key events
+        # with only modifiers (e.g. Ctrl+C) still propagate to the
+        # clipboard code before we see them.
+        def _readonly(ev):
+            allowed = {"c", "C", "a", "A", "Left", "Right", "Home", "End"}
+            if ev.state & 0x4 and (ev.keysym in allowed):
+                return
+            return "break"
+        e.bind("<Key>", _readonly)
+        return e
 
     frame = ttk.Frame(root, padding=16)
     frame.pack(fill="both", expand=True)
@@ -223,14 +304,16 @@ def _run_with_gui(args, rest):
         font=("Segoe UI", 13, "bold"),
     ).pack(anchor="w")
 
-    status_line = ttk.Label(frame, text="● running", foreground="#186a18")
-    status_line.pack(anchor="w", pady=(0, 10))
+    running_var = tk.StringVar(value="● running")
+    _selectable_entry(frame, running_var, style_name="Strong.TEntry", width=44).pack(
+        anchor="w", pady=(0, 10)
+    )
 
     url = f"http://localhost:{args.port}"
     url_var = tk.StringVar(value=url)
     url_entry = ttk.Entry(frame, textvariable=url_var, width=44)
     url_entry.pack(fill="x")
-    url_entry.bind("<Key>", lambda e: "break")  # readonly but still selectable
+    url_entry.bind("<Key>", lambda e: "break" if not (e.state & 0x4) else None)
 
     def on_open():
         webbrowser.open(url)
@@ -248,18 +331,15 @@ def _run_with_gui(args, rest):
 
     lan_ips = _lan_ips()
     if lan_ips:
-        ttk.Label(
-            frame,
-            text="LAN: " + ", ".join(f"http://{ip}:{args.port}" for ip in lan_ips),
-            foreground="#555",
-        ).pack(anchor="w")
+        lan_var = tk.StringVar(
+            value="LAN: " + ", ".join(f"http://{ip}:{args.port}" for ip in lan_ips)
+        )
+        _selectable_entry(frame, lan_var, width=60).pack(anchor="w", fill="x")
 
     zmq_var = tk.StringVar(value="ZMQ: initializing…")
-    ttk.Label(frame, textvariable=zmq_var, foreground="#555").pack(
-        anchor="w", pady=(6, 0)
-    )
+    _selectable_entry(frame, zmq_var, width=60).pack(anchor="w", fill="x", pady=(6, 0))
     stats_var = tk.StringVar(value="0 Hz  |  0 browser client(s)")
-    ttk.Label(frame, textvariable=stats_var, foreground="#555").pack(anchor="w")
+    _selectable_entry(frame, stats_var, width=60).pack(anchor="w", fill="x")
 
     def poll_status():
         try:
@@ -278,6 +358,73 @@ def _run_with_gui(args, rest):
         root.after(500, poll_status)
 
     poll_status()
+
+    # ----- collapsable log panel --------------------------------------
+    log_state = {"expanded": False}
+    toggle_var = tk.StringVar(value="▸ Show log")
+    log_frame = ttk.Frame(frame)
+
+    log_text = tk.Text(
+        log_frame,
+        height=8,
+        width=60,
+        wrap="word",
+        state="disabled",
+        bg="#111",
+        fg="#eee",
+        insertbackground="#eee",
+        font=("Consolas", 9),
+        relief="flat",
+        padx=6,
+        pady=4,
+    )
+    log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=log_text.yview)
+    log_text.configure(yscrollcommand=log_scroll.set)
+    log_text.pack(side="left", fill="both", expand=True)
+    log_scroll.pack(side="right", fill="y")
+
+    def set_log_size(expanded):
+        log_state["expanded"] = expanded
+        if expanded:
+            toggle_var.set("▾ Hide log")
+            log_frame.pack(fill="both", expand=True, pady=(8, 0))
+            root.geometry("560x480")
+        else:
+            toggle_var.set("▸ Show log")
+            log_frame.pack_forget()
+            root.geometry("480x280")
+
+    def toggle_log():
+        set_log_size(not log_state["expanded"])
+
+    ttk.Button(frame, textvariable=toggle_var, command=toggle_log, width=14).pack(
+        anchor="w", pady=(12, 0)
+    )
+    set_log_size(False)
+
+    def pump_logs():
+        # Drain everything currently in the queue — typical rate is low
+        # (boot-time prints plus the occasional ZMQ reconfigure), so a
+        # single burst on each tick is fine.
+        chunks = []
+        while True:
+            try:
+                chunks.append(log_redirect.queue.get_nowait())
+            except queue.Empty:
+                break
+        if chunks:
+            log_text.configure(state="normal")
+            log_text.insert("end", "".join(chunks))
+            # Cap the retained log at ~5000 lines so it doesn't grow
+            # forever in a long-running session.
+            num_lines = int(log_text.index("end-1c").split(".")[0])
+            if num_lines > 5000:
+                log_text.delete("1.0", f"{num_lines - 5000}.0")
+            log_text.see("end")
+            log_text.configure(state="disabled")
+        root.after(250, pump_logs)
+
+    pump_logs()
 
     def on_close():
         root.destroy()

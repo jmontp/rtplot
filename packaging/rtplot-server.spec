@@ -88,7 +88,11 @@ exe = EXE(
     # builds and some antivirus products dislike UPX-packed binaries.
     upx=False,
     runtime_tmpdir=None,
-    console=True,
+    # console=False: Windows "windowed subsystem" binary. No black
+    # console window on double-click. stdout / stderr are captured by
+    # the GUI's _TkLogRedirect and routed to the collapsable log panel,
+    # so users never lose the output they'd have seen in a console.
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
