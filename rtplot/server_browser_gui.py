@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import os
 import queue
 import sys
@@ -25,6 +26,84 @@ import threading
 import traceback
 import webbrowser
 from datetime import datetime
+
+
+# ---- persistent settings -------------------------------------------------
+#
+# Settings live in rtplot-settings.json next to the exe (portable) so a
+# user can move the exe + its settings between machines on a thumb drive
+# and not lose anything. If that directory turns out to be read-only
+# (e.g. exe dropped in Program Files), we fall back to
+# %APPDATA%\rtplot\rtplot-settings.json.
+
+def _exe_dir():
+    """Directory the exe (or dev script) is launched from."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.abspath(os.getcwd())
+
+
+def _appdata_rtplot_dir():
+    base = os.environ.get("APPDATA") or tempfile.gettempdir()
+    return os.path.join(base, "rtplot")
+
+
+def _settings_path():
+    """Return the best-effort writable path for the settings JSON."""
+    candidate = os.path.join(_exe_dir(), "rtplot-settings.json")
+    probe = candidate + ".write-probe"
+    try:
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write("")
+        os.remove(probe)
+        return candidate
+    except Exception:  # noqa: BLE001
+        try:
+            os.makedirs(_appdata_rtplot_dir(), exist_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+        return os.path.join(_appdata_rtplot_dir(), "rtplot-settings.json")
+
+
+DEFAULT_SETTINGS = {
+    # Most recent demo-sender targets, newest first, capped at 8.
+    "recent_hosts": [],
+    # Directory for Save Plot output. None -> use _exe_dir() at runtime.
+    "save_dir": None,
+}
+
+MAX_RECENT_HOSTS = 8
+
+
+def _load_settings():
+    try:
+        with open(_settings_path(), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        merged = dict(DEFAULT_SETTINGS)
+        merged.update({k: v for k, v in data.items() if k in DEFAULT_SETTINGS})
+        return merged
+    except FileNotFoundError:
+        return dict(DEFAULT_SETTINGS)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"failed to load settings: {exc}")
+        return dict(DEFAULT_SETTINGS)
+
+
+def _save_settings(settings):
+    try:
+        with open(_settings_path(), "w", encoding="utf-8") as fh:
+            json.dump(settings, fh, indent=2)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"failed to save settings: {exc}")
+
+
+def _remember_host(settings, host):
+    if not host:
+        return
+    lst = [h for h in settings.get("recent_hosts", []) if h and h != host]
+    lst.insert(0, host)
+    settings["recent_hosts"] = lst[:MAX_RECENT_HOSTS]
+    _save_settings(settings)
 
 
 class _TkLogRedirect(io.TextIOBase):
@@ -161,6 +240,64 @@ def _run_headless(args, rest):
     runpy.run_module("rtplot.server_browser", run_name="__main__")
 
 
+def _demo_sender_loop(rtp_client, stop_event, stats):
+    """Shared sine-wave sender used by both --test-client mode and the
+    "Demo sender" button inside the server window.
+
+    Writes progress into the stats dict under the keys ``count`` and
+    ``elapsed``; puts a string on ``error`` if anything raises. Stops
+    as soon as stop_event is set.
+    """
+    import math
+    import time
+
+    t0 = time.time()
+    i = 0
+    try:
+        while not stop_event.is_set():
+            t = time.time() - t0
+            rtp_client.send_array(math.sin(2 * math.pi * 1.5 * t))
+            rtp_client.set_display("count", float(i))
+            i += 1
+            stats["count"] = i
+            stats["elapsed"] = t
+            time.sleep(0.02)
+    except Exception as exc:  # noqa: BLE001
+        stats["error"] = str(exc)
+        _log("demo sender loop crashed: " + traceback.format_exc())
+
+
+def _configure_demo_sender(rtp_client, target: str, source_label: str):
+    """Configure rtplot.client for ``target`` and push the demo layout.
+
+    Returns None on success, an error string on failure.
+    """
+    try:
+        rtp_client.configure_ip(target)
+    except Exception as exc:  # noqa: BLE001
+        _log("configure_ip failed: " + traceback.format_exc())
+        return f"configure_ip({target}): {exc}"
+    plot_cfg = {
+        "names": ["demo-signal"],
+        "colors": ["b"],
+        "yrange": [-1.5, 1.5],
+        "title": "rtplot demo sender",
+        "xrange": 500,
+    }
+    controls_row = {
+        "controls": [
+            {"type": "text", "id": "src", "label": "From", "value": source_label},
+            {"type": "display", "id": "count", "label": "sent", "format": "{:.0f}"},
+        ],
+    }
+    try:
+        rtp_client.initialize_plots([plot_cfg, controls_row])
+    except Exception as exc:  # noqa: BLE001
+        _log("initialize_plots failed: " + traceback.format_exc())
+        return f"initialize_plots: {exc}"
+    return None
+
+
 def _port_conflict_message(exc: Exception, args) -> str:
     return (
         f"rtplot-server could not start:\n\n{exc}\n\n"
@@ -189,9 +326,14 @@ def _run_with_gui(args, rest):
     sys.stdout = log_redirect
     sys.stderr = log_redirect
 
+    settings = _load_settings()
+    initial_save_dir = settings.get("save_dir") or _exe_dir()
+
     # Seed sys.argv so server_browser's module-level argparse sees what we
     # want. --no-browser is always forced in GUI mode because the window
-    # has its own "Open in browser" button.
+    # has its own "Open in browser" button. --save-dir defaults to the
+    # exe's directory (or the persisted setting) instead of whatever cwd
+    # the user happened to launch from.
     forwarded = [
         sys.argv[0],
         "--no-browser",
@@ -199,6 +341,8 @@ def _run_with_gui(args, rest):
         str(args.port),
         "--host",
         args.host,
+        "--save-dir",
+        initial_save_dir,
     ]
     if args.pi_ip:
         forwarded += ["-p", args.pi_ip]
@@ -372,6 +516,191 @@ def _run_with_gui(args, rest):
 
     poll_status()
 
+    # ----- "Demo sender" self-test section ----------------------------
+    # Lets the user start a local rtplot.client inside the same process
+    # that streams a 1.5 Hz sine wave at the server. Default target is
+    # localhost (exercises the loopback ZMQ path end to end); a
+    # collapsable field lets you retarget it at another machine to
+    # smoke-test cross-PC connectivity without running a second
+    # instance of the exe with --test-client.
+    demo_frame = ttk.LabelFrame(frame, text="Demo sender", padding=10)
+    demo_frame.pack(fill="x", pady=(14, 0))
+
+    demo_state = {
+        "running": False,
+        "thread": None,
+        "stop": None,
+        "stats": {"count": 0, "elapsed": 0.0, "error": None},
+        "client": None,
+    }
+
+    demo_btn_var = tk.StringVar(value="▶ Start demo sender")
+    demo_status_var = tk.StringVar(value="")
+
+    target_expanded = {"value": False}
+    target_toggle_var = tk.StringVar(value="▸ Send to another PC…")
+    target_var = tk.StringVar(value="")
+
+    def _start_demo():
+        if demo_state["running"]:
+            return
+        target_raw = target_var.get().strip()
+        target = target_raw or "127.0.0.1"
+        demo_status_var.set(f"connecting to {target}…")
+        try:
+            if demo_state["client"] is None:
+                from rtplot import client as rtp_client  # noqa: E402
+                demo_state["client"] = rtp_client
+            rtp_client = demo_state["client"]
+        except Exception as exc:  # noqa: BLE001
+            _log("demo sender: client import failed: " + traceback.format_exc())
+            demo_status_var.set(f"error: {exc}")
+            return
+
+        source_label = (
+            "demo sender -> localhost" if not target_raw else f"demo sender -> {target}"
+        )
+        err = _configure_demo_sender(rtp_client, target, source_label)
+        if err is not None:
+            demo_status_var.set(f"error: {err}")
+            return
+
+        # Only persist the host the user explicitly typed (don't pollute
+        # the dropdown with literal "127.0.0.1" when they left it blank).
+        if target_raw:
+            _remember_host(settings, target_raw)
+            target_entry.configure(values=settings.get("recent_hosts", []))
+
+        demo_state["stats"] = {"count": 0, "elapsed": 0.0, "error": None}
+        demo_state["stop"] = threading.Event()
+        demo_state["thread"] = threading.Thread(
+            target=_demo_sender_loop,
+            args=(rtp_client, demo_state["stop"], demo_state["stats"]),
+            daemon=True,
+        )
+        demo_state["thread"].start()
+        demo_state["running"] = True
+        demo_btn_var.set("■ Stop demo sender")
+        target_entry.configure(state="disabled")
+
+    def _stop_demo():
+        if not demo_state["running"]:
+            return
+        if demo_state["stop"]:
+            demo_state["stop"].set()
+        if demo_state["thread"]:
+            try:
+                demo_state["thread"].join(timeout=1)
+            except Exception:  # noqa: BLE001
+                pass
+        demo_state["running"] = False
+        demo_btn_var.set("▶ Start demo sender")
+        target_entry.configure(state="normal")
+
+    def _toggle_demo():
+        if demo_state["running"]:
+            _stop_demo()
+        else:
+            _start_demo()
+
+    ttk.Button(demo_frame, textvariable=demo_btn_var, command=_toggle_demo).pack(
+        anchor="w"
+    )
+    _selectable_entry(demo_frame, demo_status_var, width=48).pack(
+        anchor="w", fill="x", pady=(6, 4)
+    )
+
+    def _toggle_target():
+        target_expanded["value"] = not target_expanded["value"]
+        if target_expanded["value"]:
+            target_row.pack(anchor="w", fill="x", pady=(4, 0))
+            target_toggle_var.set("▾ Hide target")
+        else:
+            target_row.pack_forget()
+            target_toggle_var.set("▸ Send to another PC…")
+
+    ttk.Button(
+        demo_frame, textvariable=target_toggle_var, command=_toggle_target, width=28
+    ).pack(anchor="w")
+
+    target_row = ttk.Frame(demo_frame)
+    target_entry = ttk.Combobox(
+        target_row,
+        textvariable=target_var,
+        values=settings.get("recent_hosts", []),
+        width=22,
+    )
+    target_entry.pack(side="left", padx=(0, 6))
+    ttk.Label(target_row, text="(blank = localhost)", foreground="#888").pack(
+        side="left"
+    )
+    # target_row starts hidden
+
+    def poll_demo_stats():
+        if demo_state["running"]:
+            stats = demo_state["stats"]
+            if stats.get("error"):
+                demo_status_var.set(f"error: {stats['error']}")
+            else:
+                demo_status_var.set(
+                    f"{stats['count']} samples sent  ·  {stats['elapsed']:.1f} s"
+                )
+        root.after(250, poll_demo_stats)
+
+    poll_demo_stats()
+
+    # ----- Settings section (save plot destination) -------------------
+    settings_frame = ttk.LabelFrame(frame, text="Settings", padding=10)
+    settings_frame.pack(fill="x", pady=(10, 0))
+
+    ttk.Label(settings_frame, text="Save plots to:").pack(anchor="w")
+    save_row = ttk.Frame(settings_frame)
+    save_row.pack(fill="x", pady=(4, 0))
+    save_dir_var = tk.StringVar(value=initial_save_dir)
+    save_dir_entry = ttk.Entry(save_row, textvariable=save_dir_var)
+    save_dir_entry.pack(side="left", fill="x", expand=True)
+
+    def _apply_save_dir(new_dir):
+        """Persist the user's save-dir choice and retarget the running server."""
+        if not new_dir:
+            return
+        new_dir = os.path.abspath(new_dir)
+        try:
+            os.makedirs(new_dir, exist_ok=True)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"could not create save dir {new_dir}: {exc}")
+            demo_status_var.set(f"save dir error: {exc}")
+            return
+        settings["save_dir"] = new_dir
+        _save_settings(settings)
+        # Retarget the already-running server without needing a restart.
+        try:
+            sb.PLOT_SAVE_PATH = new_dir  # noqa: SLF001 — intentional module global override
+            print(f"save dir changed to {new_dir}")
+        except Exception as exc:  # noqa: BLE001
+            _log(f"failed to retarget save dir on server: {exc}")
+
+    def _browse_save_dir():
+        from tkinter import filedialog
+
+        current = save_dir_var.get() or _exe_dir()
+        chosen = filedialog.askdirectory(
+            initialdir=current, title="Choose where to save plots"
+        )
+        if chosen:
+            save_dir_var.set(chosen)
+            _apply_save_dir(chosen)
+
+    ttk.Button(save_row, text="…", command=_browse_save_dir, width=3).pack(
+        side="left", padx=(4, 0)
+    )
+
+    def _on_save_dir_commit(_event=None):
+        _apply_save_dir(save_dir_var.get())
+
+    save_dir_entry.bind("<Return>", _on_save_dir_commit)
+    save_dir_entry.bind("<FocusOut>", _on_save_dir_commit)
+
     # ----- collapsable log panel --------------------------------------
     log_state = {"expanded": False}
     toggle_var = tk.StringVar(value="▸ Show log")
@@ -401,11 +730,11 @@ def _run_with_gui(args, rest):
         if expanded:
             toggle_var.set("▾ Hide log")
             log_frame.pack(fill="both", expand=True, pady=(8, 0))
-            root.geometry("560x480")
+            root.geometry("560x700")
         else:
             toggle_var.set("▸ Show log")
             log_frame.pack_forget()
-            root.geometry("480x280")
+            root.geometry("520x560")
 
     def toggle_log():
         set_log_size(not log_state["expanded"])
@@ -440,6 +769,10 @@ def _run_with_gui(args, rest):
     pump_logs()
 
     def on_close():
+        # Stop the demo sender thread first so it doesn't try to send
+        # through a half-closed ZMQ socket during interpreter shutdown.
+        if demo_state["running"] and demo_state["stop"]:
+            demo_state["stop"].set()
         root.destroy()
         # Kill the server thread hard — it's a daemon but aiohttp's
         # event loop may not exit cleanly during process teardown on
@@ -460,16 +793,12 @@ def _run_test_client(args, rest):
     user knows the connection is alive even before they look at the
     server's browser page.
     """
-    import math
-    import time
     import tkinter as tk
     from tkinter import ttk
 
     target = args.test_client
     _log(f"starting test-client mode target={target}")
 
-    # Install log redirect + blank Tk early so any import / connect
-    # failure below still surfaces in a visible dialog.
     log_redirect = _TkLogRedirect()
     sys.stdout = log_redirect
     sys.stderr = log_redirect
@@ -484,45 +813,16 @@ def _run_test_client(args, rest):
         )
         return
 
-    try:
-        rtp_client.configure_ip(target)
-    except Exception as exc:  # noqa: BLE001
-        _log("configure_ip failed: " + traceback.format_exc())
+    err = _configure_demo_sender(rtp_client, target, f"test client -> {target}")
+    if err is not None:
         _show_error_dialog(
             "rtplot test client",
-            f"Could not configure target '{target}':\n\n{exc}\n\n"
-            "Check the host is reachable (ping it) and that the\n"
+            f"{err}\n\nCheck the host is reachable (ping it) and that the\n"
             "rtplot-server is running there on the default ZMQ port (5555).",
         )
         return
+    print(f"initialized remote plot on {target}")
 
-    plot_cfg = {
-        "names": ["test-signal"],
-        "colors": ["b"],
-        "yrange": [-1.5, 1.5],
-        "title": f"rtplot test client",
-        "xrange": 500,
-    }
-    controls_row = {
-        "controls": [
-            {"type": "text", "id": "source", "label": "From",
-             "value": f"test client at localhost"},
-            {"type": "display", "id": "count", "label": "sent", "format": "{:.0f}"},
-            {"type": "button", "id": "ack", "label": "Ack"},
-        ],
-    }
-    try:
-        rtp_client.initialize_plots([plot_cfg, controls_row])
-        print(f"initialized remote plot on {target}")
-    except Exception as exc:  # noqa: BLE001
-        _log("initialize_plots failed: " + traceback.format_exc())
-        _show_error_dialog(
-            "rtplot test client",
-            f"Failed to initialize remote plot:\n\n{exc}\n\nSee {LOG_FILE}",
-        )
-        return
-
-    # ---- Tk status window
     root = tk.Tk()
     root.title("rtplot test client")
     root.resizable(False, False)
@@ -531,14 +831,10 @@ def _run_test_client(args, rest):
     frame.pack(fill="both", expand=True)
 
     ttk.Label(
-        frame,
-        text="rtplot test client",
-        font=("Segoe UI", 13, "bold"),
+        frame, text="rtplot test client", font=("Segoe UI", 13, "bold")
     ).pack(anchor="w")
     ttk.Label(
-        frame,
-        text=f"Sending demo data to  {target}",
-        foreground="#555",
+        frame, text=f"Sending demo data to  {target}", foreground="#555"
     ).pack(anchor="w", pady=(0, 10))
     ttk.Label(
         frame,
@@ -557,24 +853,11 @@ def _run_test_client(args, rest):
     stop_event = threading.Event()
     stats = {"count": 0, "elapsed": 0.0, "error": None}
 
-    def sender_loop():
-        t0 = time.time()
-        i = 0
-        try:
-            while not stop_event.is_set():
-                t = time.time() - t0
-                val = math.sin(2 * math.pi * 1.5 * t)
-                rtp_client.send_array(val)
-                rtp_client.set_display("count", float(i))
-                i += 1
-                stats["count"] = i
-                stats["elapsed"] = t
-                time.sleep(0.02)
-        except Exception as exc:  # noqa: BLE001
-            stats["error"] = exc
-            _log("sender loop crashed: " + traceback.format_exc())
-
-    sender_thread = threading.Thread(target=sender_loop, daemon=True)
+    sender_thread = threading.Thread(
+        target=_demo_sender_loop,
+        args=(rtp_client, stop_event, stats),
+        daemon=True,
+    )
     sender_thread.start()
 
     def poll_stats():
