@@ -19,7 +19,12 @@ import time
 
 import numpy as np
 
-import client
+try:
+    # Normal path: installed package or `python -m rtplot.interactive_test`
+    from rtplot import client
+except ImportError:
+    # Fallback: running as a loose script from inside the rtplot/ directory
+    import client
 
 
 # ----- utilities -----------------------------------------------------------
@@ -119,7 +124,8 @@ def main():
     ]}
     controls_row_dial = {"controls": [
         {"type": "dial", "id": "freq", "label": "Freq (Hz)",
-         "min": 0.1, "max": 5.0, "value": 1.0, "step": 0.05, "format": "{:.2f}"},
+         "min": 0.1, "max": 5.0, "value": 1.0, "step": 0.05,
+         "sensitivity": 0.5, "format": "{:.2f}"},
     ]}
     controls_row_status = {"controls": [
         {"type": "text", "id": "status", "label": "Status",

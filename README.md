@@ -1,252 +1,420 @@
 ![Logo of the project](https://github.com/jmontp/rtplot/blob/master/.images/signature-stationery.png)
 
-# Real Time Plotting with pyqtgraph and ZMQ
+# rtplot — real-time plotting over ZMQ
 
-The point of this module is to be able to plot data in python in real time either from a script running locally in your computer or a script that is on a remote computer that sends data over a network (e.g. from a raspberry pi)
+**rtplot** lets a Python script push live data to a plot window — locally, or
+across the network — with a few lines of code on the sender side. The plot
+window can be a traditional Qt application or a modern browser UI, and it
+also supports interactive controls (buttons, sliders, dials, text and
+numeric displays) that feed values back into the sending script in real time.
 
-The rtplot library consist of two modules: a server, which acts like a standalone script which opens a window that waits to recieve plots and data, and a client which is used to modify your code to send the data to the server.
+Typical use: a robot or data-acquisition script runs on a Raspberry Pi or
+microcontroller host, and you watch live signals and tweak gains from a
+laptop on the same network.
 
+---
 
-The main highlight in this plotter are the following:
-* **Fast Performance**. Can do 500+ fps on one trace using an i7-9750H processor
-* **Remote Plot Customizability**. The plot configuration is defined by the provider of the data. E.g. if you are using a pi to collect data, the plot configuration is also stored on the pi so you only have to change code in one location 
-* **Save data**. Once you plot the data, you can save it locally by clicking one button.
+## Table of contents
 
+- [Highlights](#highlights)
+- [Install](#install)
+- [60-second quickstart](#60-second-quickstart)
+- [Choosing a server: browser vs. Qt](#choosing-a-server-browser-vs-qt)
+- [Interactive controls](#interactive-controls)
+  - [Reading controls from Python](#reading-controls-from-python)
+  - [Pushing values into displays](#pushing-values-into-displays)
+  - [Element reference](#element-reference)
+- [Plot configuration](#plot-configuration)
+- [Sending data](#sending-data)
+- [Saving data](#saving-data)
+- [Networking modes](#networking-modes)
+- [Performance tuning](#performance-tuning)
+- [CLI reference](#cli-reference)
+- [Examples](#examples)
 
-# Install 
-To install just the client (can only send data)
+---
 
-```pip install better-rtplot```
+## Highlights
 
-To install the client and the dependencies for the server. This is not recommended for smaller devices since some dependencies are large.
+- **Fast.** 500+ fps on a single trace on a modern laptop. Binary WebSocket
+  deltas on the browser server; raw Qt rendering on the desktop server.
+- **Two frontends.** A new browser-based server (aiohttp + uPlot) and the
+  original pyqtgraph desktop server. Both speak the same ZMQ protocol, so
+  client code is identical.
+- **Remote-friendly.** Either the sender or the plot host can bind — pick
+  whichever fits your network. Works across LAN, WSL, and SSH tunnels.
+- **Plot config lives with the data.** The sender declares the plot layout,
+  so a Pi running your experiment owns the look of its own dashboards.
+- **Interactive controls** *(browser server only)*. Declare buttons,
+  sliders, dials, numeric/text displays in the same `initialize_plots`
+  call. Poll from your tight loop; no threads, no callbacks.
+- **Save to Parquet** with a single button click or `client.save_plot()`
+  call.
 
-```pip install "better-rtplot[server]"```
+---
 
-If you are using WSL, you need to install an xorg server such as [vcXsrv](https://sourceforge.net/projects/vcxsrv/) to see the plot. However, this should run in a native windows install of python.
+## Install
 
-# How to use
-The general steps to use the plotter are as follows:
+Minimum install — just the client (send data only):
 
-1. Run the server.py script on the computer that will be used to visualize the data
-2. Import the client library to (lightly) modify your code so that it can send data to the server
+```bash
+pip install better-rtplot
+```
 
-In more detail:
+Add the browser server (recommended):
 
-## Step 1: Run the program that visualizes the data (server.py)
+```bash
+pip install "better-rtplot[browser]"
+```
 
-To run the server script, you can run the following code in the command line 
+Add the Qt/pyqtgraph server instead:
 
-```python3 -m rtplot.server```
+```bash
+pip install "better-rtplot[server]"
+```
 
-This will open a window which will wait for plots that are sent by a client. This is a convenient setup if you know the IP address of the computer that is running the server. However, if you don't know the IP address, you can specify the ip address of the computer that is sending data (e.g. the client) with the following line:
+The `browser` extra pulls `aiohttp` + `pandas` + `pyarrow`; the `server`
+extra pulls `pyqtgraph` + `PySide6` + `pandas` + `pyarrow`. If you only
+`pip install better-rtplot` and try to launch a server, rtplot will print
+a friendly message telling you which extra to add.
 
- ``` python3 -m rtplot server.py -p 192.168.1.1```
-  
-Where the"192.168.1.1" represents the IP address of the computer you want to connect to (note, you must be on the same network).
-   
-## Step 2: Modify your code to send data (use "client" library)
+WSL users: the browser server works out of the box — open the URL it
+prints in your Windows browser. The Qt server needs an X server such as
+[VcXsrv](https://sourceforge.net/projects/vcxsrv/).
 
-You only need to follow a few steps to update your code to send data to a server
+---
 
-Step 0: Import client library
-Step 1: (Optional) Set the IP address of the server
-Step 2: Send the plot configuration to the server
-Step 3: Send data to the server
+## 60-second quickstart
 
-Here is a small example to get your started. This will create a plot with one trace and send the number 5 to it:
+**Terminal 1 — start a plot window:**
+
+```bash
+python -m rtplot.server_browser        # browser UI at http://localhost:8050
+# or
+python -m rtplot.server                 # desktop Qt window
+```
+
+**Terminal 2 — send data:**
 
 ```python
-# Step 0: Load plotting library
-from rtplot import client 
+from rtplot import client
+import numpy as np, time
 
-# Step 1: Configure the IP address
-# Point to the same comptuer
+client.local_plot()                     # send to the server on 127.0.0.1
+client.initialize_plots(["sin", "cos"]) # one plot with two named traces
+
+for i in range(10000):
+    t = i * 0.01
+    client.send_array([np.sin(t), np.cos(t)])
+    time.sleep(0.01)
+```
+
+That's it. Open http://localhost:8050 if you used the browser server; the
+Qt server will pop up its own window.
+
+---
+
+## Choosing a server: browser vs. Qt
+
+| | **Browser server** (`rtplot.server_browser`) | **Qt server** (`rtplot.server`) |
+|---|---|---|
+| Frontend | aiohttp + uPlot in any modern browser | pyqtgraph + PySide6 desktop window |
+| Extra | `[browser]` | `[server]` |
+| Works over SSH | Yes (just forward the HTTP port) | No (needs X forwarding) |
+| Interactive controls | **Yes** — buttons, sliders, dials, displays | No |
+| Typical frame rate | 60 Hz render, 1000 Hz data push cap | 500+ fps |
+| Saves to Parquet | Yes | Yes |
+
+If you're on WSL, running remotely, or you want interactive controls,
+**use the browser server**. The Qt server is still available for local
+desktop use and for legacy setups.
+
+---
+
+## Interactive controls
+
+*Browser server only.* Declare a control row inline in your plot layout:
+
+```python
+from rtplot import client
+import numpy as np, time
+
 client.local_plot()
+client.initialize_plots([
+    {"names": ["signal"], "yrange": [-6, 6]},
+    {"controls": [
+        {"type": "button", "id": "reset", "label": "Reset"},
+        {"type": "button", "id": "pause", "label": "Pause"},
+        {"type": "slider", "id": "gain",  "label": "Gain",
+         "min": 0, "max": 5, "value": 1.0, "step": 0.1, "format": "{:.2f}"},
+    ]},
+    {"controls": [
+        {"type": "dial",    "id": "freq", "label": "Freq (Hz)",
+         "min": 0.1, "max": 5.0, "value": 1.0, "step": 0.05,
+         "sensitivity": 0.5, "format": "{:.2f}"},
+        {"type": "display", "id": "t",    "label": "t (s)", "format": "{:.2f}"},
+        {"type": "text",    "id": "msg",  "label": "Status",
+         "value": "running"},
+    ]},
+])
 
-# Step 2: Initialize the plots
-# Initialize one plot with 1 traces
-client.initialize_plots(1)
+running = True
+t0 = time.time()
+while True:
+    ctrl = client.poll_controls()
+    for btn in ctrl.buttons:
+        if btn == "reset": t0 = time.time()
+        if btn == "pause": running = not running
 
-#Send 1000 datapoints
-for i in range(1000):
+    gain = ctrl.values.get("gain", 1.0)
+    freq = ctrl.values.get("freq", 1.0)
+    t = time.time() - t0
+    amp = gain * np.sin(2 * np.pi * freq * t) if running else 0.0
 
-    # Step 3: Send the data
-    # Send the number 5 a thousand times
-    client.send_array(5)
+    client.set_display("t", t)
+    client.set_display("msg", "paused" if not running else "running")
+    client.send_array(amp)
+    time.sleep(0.01)
 ```
 
-Here is a more detailed explanation of every step
+### Reading controls from Python
 
-### Code changes 1: (Optional) Set the IP address of the server
-
-There are three function calls that will allow you to configure the IP address of the plotter
-
-```client.configure_ip(ip)```
-
-This is the most common function you will use. The ip address is a string in the normal format. For example ```client.configure_ip(192.168.1.1)``` will connect to the computer addressed at 192.168.1.1 on port 5555 by default. You can also specify the port by adding it with a colon. Therefore, ```client.configure_ip(192.168.1.1:1234)``` connects to IP address 192.168.1.1 on port 1234.
-
-```client.local_plot()```
-
-This will indicate that the server is running in the same machine. It is a shorthand for ```client.configure_ip(127.0.0.1)```
-
-```client.plot_to_neurobionics_tv()```
-
-This will send data to the TV in the rehab lab bigscreen TV.
-
-
- ### Code changes 2: Send the plot configuration to the server
-
-The client specifies what the plot looks like. Therefore, that has to be added to where you send the data. The only function that you need to call is ```client.initialize_plots()```. This function can take in many different arguments to define the look and feel. At the most basic level you can have one plot with one or more traces. However, you can add multiple sub-plots with different amounts of traces in each. Therefore the different ways that you can call ```client.initialize_plots(plot_layout)``` are:
-
-- No argument
-  
-This will intialize the plot to have one subplot with one trace
-
-- Integer
-  
-This will configure one subplot to have the a
-
-- String
-  
-This will configure the plots to have one subplot with a trace named the same as the string
-
-- List of strings
-  
-One subplot with as many traces as names in the list, each with the corresponding name.
-
-- List that contains lists of strings
-  
-Same as above, but now with as many subplots as sublists
-
-- Dictionary
-  
-One subplot with a more advanced configuration
-
-- List of dictionaries
-  
-Many subplots, each with an advanced configuration
-
-
-### :cherry_blossom: Make pretty plots :cherry_blossom:
-
-You can control the look and feel of the plots by sending a dictionary that contains specific strings as the keys. These are as follows
-
-
-- 'names' - This defines the names of the traces. The plot will have as many traces as names.
-
-- 'colors' - Defines the colors for each trace. [Follow documentation on how to specify color](https://pyqtgraph.readthedocs.io/en/latest/style.html). Should have at least the same length as the number of traces.
-
-- 'line_style' - Defines wheter or not a trace is dashed or not. 
-    * '-' - represents dashed line
-    * "" - emptry string (or any other string) represents a normal line
-
-- 'line_width' - Defines how thick the plot lines are. Expects an integer
-
-- 'title' - Sets the title to the plot
-
-- 'ylabel' - Sets the y label of the plot
-
-- 'xlabel' - Sets the x label of the plot
-
-- 'yrange' - Sets the range of values of y. This provides a performance boost to the plotter
-   * Expects values as a iterable in the order [min, max]. Example: [-2,2]
-
-- 'xrange' - Sets the number of datapoints that will be in the real time plotter at a given time.
-   * Expects values as a integer that describes how many datapoints are in the subplot. Default is 200 datapoints
-
-You only need to specify the things that you want, if the dictionary element is left out then the default value is used. 
-
-You can see the [example code](https://github.com/jmontp/rtplot/blob/master/rtplot/example_code.py) to see how these are used.
-
-### Code changes 3: How to send data
-
-To send data to the server, you use the ```client.send_array(arr)``` function. Similar to initialize plots, this function also takes in multiple different argument types:
-
-- Float
-When there is only one trace
-
-- List of float
-The length of the list has to equal the total number of traces that are configured for the plot
-
-- 1-d Numpy array
-The size of the numpy array has to be equal to the total number of traces that are configured for the plot
-
-- 2-d Numpy array
-The number of rows must equal the total number of traces. The column can vary in length. The sever will plot as many datapoints as you send in. E.g. the plot will be updated with 10 new points if you have 10 columns. This can make the plot looks less smooth but it will increase performance. More on improving performance later.
-
-# Saving plots
-
-The server is also capable of saving the data that has been sent since the latest plot has been initialized (if a new plot configuration is sent, the existing data will be wiped). To do this, you can either press the botton at the end of the server that says 'save plot', or trigger the save with the client using the ```client.save_plot(log_name)``` function. 
-
-By default, the server will save the plot in the directory where the server was run. A relative file path can be supplied to the server with the -sd flag
-````python3 -m rtplot.server -sd ./saved_plots``
-And the file name can also be modified using the -sn flag
-````python3 -m rtplot.server -sn test_plot``
-Note that a timestamp will be appended to the end of the plot name to be able to determine which plot is the newest. 
-
-## Save data without plotting it
-You can have data that is not displayed in the screen but is still transmitted to the server and saved. To achieve this, you need to add a special dictionary configuration that only has one key called ```'non_plot_labels'``` that indicates what names the data that you are storing have. Example: 
 ```python
-non_plot_dict = {'non_plot_labels':['data0','data1','data2']}
+ctrl = client.poll_controls()           # non-blocking, cheap to call every loop
+gain = ctrl.values.get("gain", 1.0)     # latest slider/dial value
+for btn_id in ctrl.buttons:             # list of buttons fired since last poll
+    handle(btn_id)
 ```
-This example will expect you to send three additional datapoints to the ones displayed that will be saved when the save plot is triggered. By convention, you should add this dictonary to the end of the list of dictionaries that are sent to the server.
+
+`poll_controls()` returns a `ControlState(values, buttons)` namedtuple:
+
+- `values` — a `dict` of `{element_id: float}` for every slider and dial
+  the server has told the client about. Defaults declared in
+  `initialize_plots` are pre-seeded so the **first** call already sees
+  them.
+- `buttons` — a `list` of button ids fired since the previous poll, in
+  order. The list is cleared on return, so each event is delivered
+  exactly once.
+
+Call it from your tight loop before computing the next sample. No
+threads, no callbacks, no missed events.
+
+### Pushing values into displays
+
 ```python
-plots = [plot_config_0, plot_config_1,non_plot_dict]
-client.initialize_plots(plots)
-```
- 
-# Additional networking details
-
-There are two main ways that you can connect to transmit information. Either the computer that runs the server knows what IP the client is (server connects to client), or the client knows which IP the server has (server connects to client). For either option, follow the steps bellow:
-
-## Server connects to client
-This is accomplished by running the server with the IP address of the pi as an argument.
-
-```
-python3 server.py -p xxx.xxx.xxx.xxx
+client.set_display("t", 12.34)       # numeric display box
+client.set_display("msg", "running") # text field
 ```
 
-Where xxx.xxx.xxx.xxx is the IP address of the pi. No additional configuration is needed on the client side.
+`set_display()` accepts either a number (for `type: "display"` elements)
+or a string (for `type: "text"` elements). Updates are coalesced on the
+server and rebroadcast to every connected browser at ~30 Hz.
 
+### Element reference
 
-## Client connects to server
-This is done by setting up the server with the static ip flag.
+| Type | Purpose | Notable fields |
+|---|---|---|
+| `button` | Fires a discrete event when clicked | `id`, `label` |
+| `slider` | Scalar input via horizontal range | `id`, `label`, `min`, `max`, `value`, `step`, `format` |
+| `dial` | Scalar input via rotational drag | same as slider, plus `sensitivity` (full turns per range sweep; default `1.0`) |
+| `display` | Read-only numeric readout | `id`, `label`, `format` |
+| `text` | Read-only text field (prompts, status) | `id`, `label`, `value` |
 
+Slider and dial widgets both render as **`[widget] [−] [number input] [+]`**,
+so you can drag, type a value directly, or nudge by `step`. The dial
+accepts "round and round" circular drag — each full rotation walks the
+value through `(max − min) × sensitivity`, so `sensitivity: 0.25` gives
+you four rotations per sweep for fine control.
+
+The `format` field accepts Python-style `{:.Nf}` strings (e.g. `"{:.2f}"`).
+
+---
+
+## Plot configuration
+
+Each entry in `initialize_plots` is one of:
+
+- an **integer** — `client.initialize_plots(3)` → one plot with 3 anonymous
+  traces
+- a **string** — `client.initialize_plots("torque")` → one plot with one
+  named trace
+- a **list of strings** — one plot, one trace per name
+- a **list of lists of strings** — one plot per sublist
+- a **dict** — one plot, with full styling options (below)
+- a **list of dicts** — multiple plots with full styling
+
+A styled plot dict accepts any of:
+
+| Key | Meaning |
+|---|---|
+| `names` | **Required.** List of trace names. |
+| `colors` | List of per-trace colors. Single letter (`r g b c m y k w`) or any CSS color string. |
+| `line_style` | `"-"` for dashed, `""` (or anything else) for solid, per trace. |
+| `line_width` | Per-trace line width in pixels. |
+| `title` | Plot title. |
+| `xlabel` / `ylabel` | Axis labels. |
+| `yrange` | `[ymin, ymax]` — pins the Y axis and significantly speeds up rendering. |
+| `xrange` | Integer number of samples visible at once (default 200). |
+
+Special row entries (not plots themselves):
+
+- `{"controls": [...]}` — a row of interactive controls (browser server only)
+- `{"non_plot_labels": ["name1", "name2"]}` — extra scalar names that ride
+  along with `send_array` and get saved into the output Parquet file, but
+  aren't rendered as traces
+
+---
+
+## Sending data
+
+```python
+client.send_array(scalar)           # float
+client.send_array([a, b, c])        # 1-D list: one sample per trace
+client.send_array(np.array([...]))  # 1-D numpy array: one sample per trace
+client.send_array(np.array([[...]]))# 2-D (num_traces, N): N samples at once
 ```
-python3 server.py -s
+
+Passing a 2-D array with `N > 1` lets you push a batch of samples per
+`send_array` call, which is the fastest way to get many samples through
+without dropping frames.
+
+---
+
+## Saving data
+
+The server saves every sample it has received since the latest
+`initialize_plots` call to a Parquet file, including any
+`non_plot_labels` data that rode along with your normal data.
+
+Trigger a save from either side:
+
+- **Browser UI:** click the **Save Plot** button.
+- **Python:** `client.save_plot("my_run")`
+
+Control where things get written:
+
+```bash
+python -m rtplot.server_browser -sd ./saved_plots -sn experiment1
 ```
 
-The client then needs to specify the ip of the plotter by running:
+- `-sd` / `--save-dir` — target directory
+- `-sn` / `--save-name` — filename prefix (a timestamp is always appended)
+
+### Save non-plot signals alongside the plotted ones
+
+```python
+client.initialize_plots([
+    {"names": ["hip_angle", "knee_angle"]},
+    {"non_plot_labels": ["battery", "cpu_temp", "loop_latency"]},
+])
 ```
-client.configure_ip("xxx.xxx.xxx.xxx")
+
+Send `battery`, `cpu_temp` and `loop_latency` as extra rows after the
+plotted traces in each `send_array` call; they won't be drawn but they
+will land in the Parquet file.
+
+---
+
+## Networking modes
+
+rtplot uses ZMQ, so either the sender or the plot host can be the one
+that *binds* a socket. Pick whichever works for your network and
+firewalls.
+
+**Mode A — plot host binds, sender connects** *(typical for lab laptops)*
+
+```bash
+# on the plot host (e.g. your laptop)
+python -m rtplot.server_browser
 ```
 
-Where xxx.xxx.xxx.xxx is the IP address of the server.
+```python
+# on the sender (e.g. the Pi)
+from rtplot import client
+client.configure_ip("192.168.1.42")   # the laptop's LAN IP
+```
 
- 
-# Plotter too slow?
+**Mode B — sender binds, plot host connects** *(typical when the sender
+has a static IP and the viewer roams around)*
 
-Even though the plotter is built to be fast, if you have enough traces in the screen it can cause it to slow down. The bottleneck in the code is redrawing the traces. In particular, the amount of pixels it has to redraw will close it down (weird bottleneck, I know). To get around this you can do serveral things to improve the frames per second of the plotter. 
+```bash
+# on the plot host
+python -m rtplot.server_browser -p 192.168.1.50   # the sender's IP
+```
 
-- Fix y range. The easiest way to get a significant increase in frames per second is to set the 'yrange' configuration of the plot. If you are having slower than desired performance this is the first step I would take. 
+```python
+# on the sender
+from rtplot import client
+# no configure_ip call needed — the default behavior binds
+```
 
-- Plot multiple points at the same time. You can redraw the plot after multiple datapoints instead of updating every single data point. This will cause the plotter to look un-smooth if too many points are sent at the same time. This can be done in one of two ways:
-  * Pass in the '-s' flag along with an integer to the server. This will cause the server to skip datapoints between plot refreshing. For example,
-  ```python3 -m rtplot.server -s 5```
-  will refresh the plot once it receives 5 transmissions of data. If you set the -a flag in the server, it will automatically update the skip rate. This is only good to experiment to find the skip rate that works for you and bad if you want the time data to have the correct timestamps since the rate at which you consume data will change. The adapted rate is printed to the terminal
-  
-  * Send a batch of data from the client. Using a 2-d numpy array, the first axis will represent the amount of traces in the plot configuration and the second axis will determine how many datapoints you want to send. The server will automatically determine how much data you are sending. This stacks with the server's '-s' flag. 
+If you pass `-p host:port` to the server, rtplot also derives the control
+return-channel endpoint from that same host/port (it uses `port+1`). This
+means sliders, buttons, and dials work transparently in both modes with
+no extra config.
 
-- Reduce the amount of pixels that you have to plot. If you reduce the size of the plotter window, or reduce the resolution of the monitor. 
+---
 
-- Reduce the line width of the traces. There is an option in the plotter configuration dictionary to increase the line width of each trace. While this makes the lots much easier to read it also makes it much slower. Therefore, keeping the line width at a minimum helps to keep the speed up. 
+## Performance tuning
 
+If you start running out of frames, try these, in roughly this order:
 
+1. **Pin the Y range.** `{"yrange": [-2, 2]}` on each plot lets the
+   renderer skip autoscaling work and gives the single biggest win.
+2. **Batch your samples.** Pass a 2-D numpy array to `send_array` so N
+   samples ship per call.
+3. **Shrink the window.** Fewer pixels to redraw per frame.
+4. **Reduce `line_width`.** Thicker lines cost more to rasterize.
+5. **Use the `-s N` / `--skip N` server flag** to push every Nth sample
+   batch to the browser instead of every one. Add `-a` / `--adaptable`
+   to let the server tune `N` to your data rate automatically.
+6. **Increase `xrange`.** Counterintuitively, a longer visible history
+   can be cheaper than a short one because the browser ring-buffers the
+   data and only replaces the tail on each push.
 
-# [Example Code](https://github.com/jmontp/rtplot/blob/master/rtplot/example_code.py)
+---
 
+## CLI reference
 
-# Example Image
-![alt text](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example1.png "Example 1")
+**Browser server** (`python -m rtplot.server_browser`):
 
-![alt text](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example2.png "Example 2")
+| Flag | Default | Meaning |
+|---|---|---|
+| `-p HOST[:PORT]` | (bind) | Connect to a sender at this address instead of binding |
+| `--host HOST` | `0.0.0.0` | HTTP bind interface |
+| `--port N` | `8050` | HTTP port |
+| `--no-browser` | off | Don't try to open a browser on startup |
+| `--rate N` | `1000` | Max WebSocket push rate (Hz) |
+| `-n N` / `--skip N` | `1` | Push every Nth sample batch |
+| `-a` / `--adaptable` | off | Auto-tune skip rate to data rate |
+| `-c` / `--column` | row | Lay plots out in columns instead of rows |
+| `-d` / `--debug` | off | Extra debug logging |
+| `-sd DIR` / `--save-dir DIR` | cwd | Where to write `.parquet` saves |
+| `-sn NAME` / `--save-name NAME` | — | Prefix for saved filenames |
+
+**Qt server** (`python -m rtplot.server`): same `-p`, `-n`, `-a`, `-c`,
+`-d`, `-sd`, `-sn` flags as above, plus:
+
+| Flag | Meaning |
+|---|---|
+| `-b` / `--bigscreen` | Pre-configure for the neurobionics lab big-screen display |
+| `-t FILE` / `--plot_config FILE` | Load a plot configuration from a file on startup |
+
+---
+
+## Examples
+
+- [`rtplot/example_code.py`](rtplot/example_code.py) — a walk through
+  every `initialize_plots` signature, plus a controls demo at the bottom.
+- [`rtplot/interactive_test.py`](rtplot/interactive_test.py) — a guided
+  end-to-end test that walks you through clicking buttons, dragging
+  sliders, typing into the number input, using the ± nudge arrows, and
+  spinning the dial. Good for smoke-testing a fresh install.
+
+  ```bash
+  python -m rtplot.server_browser &
+  python -m rtplot.interactive_test
+  ```
+
+![Qt server example 1](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example1.png)
+![Qt server example 2](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example2.png)

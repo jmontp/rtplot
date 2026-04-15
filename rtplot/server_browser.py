@@ -20,7 +20,24 @@ from time import perf_counter
 import numpy as np
 import zmq
 import zmq.asyncio
-from aiohttp import WSMsgType, web
+
+try:
+    from aiohttp import WSMsgType, web
+except ImportError as _exc:
+    import sys
+    _missing = getattr(_exc, "name", None) or "aiohttp"
+    sys.stderr.write(
+        "\n[rtplot] Cannot import '{m}'. The browser server requires the\n"
+        "'browser' extra (aiohttp, plus pandas + pyarrow for saving plots).\n"
+        "\n"
+        "Install it with:\n"
+        "    pip install 'better-rtplot[browser]'\n"
+        "\n"
+        "If you only need the Qt-based server, run 'python -m rtplot.server'\n"
+        "instead (that one uses pyqtgraph + PySide6 from the 'server' extra).\n"
+        "\n".format(m=_missing)
+    )
+    sys.exit(1)
 
 ############################
 # Command Line Arguments #
@@ -828,7 +845,8 @@ INDEX_HTML = """<!doctype html>
   .ctrl-nudgebtn { width: 26px; height: 26px; font-size: 15px; font-weight: 600; line-height: 1; padding: 0; border: 1px solid #b8b8b8; background: #f7f7f7; color: #333; cursor: pointer; border-radius: 3px; }
   .ctrl-nudgebtn:hover { background: #e9e9e9; }
   .ctrl-nudgebtn:active { background: #dcdcdc; }
-  .ctrl-dial { cursor: ns-resize; flex: 0 0 auto; }
+  .ctrl-dial { cursor: grab; flex: 0 0 auto; touch-action: none; user-select: none; }
+  .ctrl-dial-dragging { cursor: grabbing; }
   .ctrl-dial .dial-track { fill: #fafafa; stroke: #bcbcbc; stroke-width: 2; }
   .ctrl-dial .dial-indicator { stroke: #2a5db0; stroke-width: 3; stroke-linecap: round; }
   .ctrl-dial:hover .dial-track { stroke: #888; }
@@ -954,7 +972,10 @@ INDEX_HTML = """<!doctype html>
           sendCtrl({ type: 'control_slider', id: el.id, value: Number(value) });
         };
 
-        widget = renderWidget({ min, max, step, initial: value, commit, applyLocal });
+        const sensitivity = (el.sensitivity !== undefined && Number.isFinite(Number(el.sensitivity)))
+          ? Number(el.sensitivity)
+          : 1.0;
+        widget = renderWidget({ min, max, step, initial: value, commit, applyLocal, sensitivity });
         if (widget && widget.node) item.appendChild(widget.node);
 
         const minusBtn = document.createElement('button');
@@ -1003,7 +1024,7 @@ INDEX_HTML = """<!doctype html>
         };
       }
 
-      function buildDialWidget({ min, max, initial, commit }) {
+      function buildDialWidget({ min, max, initial, commit, sensitivity }) {
         const svgNS = 'http://www.w3.org/2000/svg';
         const size = 72;
         const svg = document.createElementNS(svgNS, 'svg');
@@ -1038,20 +1059,35 @@ INDEX_HTML = """<!doctype html>
         }
         renderAt(current);
 
+        // Angular drag: track the pointer angle from the dial center and
+        // accumulate signed deltas so the user can spin the dial "round and
+        // round" — each full turn maps to (max-min) * sensitivity of value.
+        // sensitivity > 1 => coarser, sensitivity < 1 => finer control.
         svg.addEventListener('pointerdown', (e) => {
-          const startY = e.clientY;
+          const rect = svg.getBoundingClientRect();
+          const cxGlobal = rect.left + rect.width / 2;
+          const cyGlobal = rect.top + rect.height / 2;
+          let prevAngle = Math.atan2(e.clientY - cyGlobal, e.clientX - cxGlobal);
+          let accumulated = 0;
           const startV = current;
-          const sensitivity = 150; // px for full range
           const range = (max - min) || 1;
+          svg.classList.add('ctrl-dial-dragging');
+
           const onMove = (em) => {
-            const dy = startY - em.clientY;
-            let v = startV + dy * range / sensitivity;
+            const a = Math.atan2(em.clientY - cyGlobal, em.clientX - cxGlobal);
+            let delta = a - prevAngle;
+            if (delta > Math.PI) delta -= 2 * Math.PI;
+            else if (delta < -Math.PI) delta += 2 * Math.PI;
+            accumulated += delta;
+            prevAngle = a;
+            let v = startV + (accumulated / (2 * Math.PI)) * range * sensitivity;
             v = Math.max(min, Math.min(max, v));
             renderAt(v);
           };
           const onUp = () => {
             document.removeEventListener('pointermove', onMove);
             document.removeEventListener('pointerup', onUp);
+            svg.classList.remove('ctrl-dial-dragging');
             commit(current);
           };
           document.addEventListener('pointermove', onMove);
