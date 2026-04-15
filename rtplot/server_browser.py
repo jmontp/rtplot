@@ -306,9 +306,20 @@ def save_current_plot(log_name=None):
     """Persist the current buffer to a Parquet file.
 
     Identical layout to ``server.save_current_plot`` so saved files are
-    interchangeable between the Qt and browser servers.
+    interchangeable between the Qt and browser servers. pandas + pyarrow
+    are optional and may be absent from slim builds (e.g. the Windows
+    exe). In that case we log a clear message and return without
+    raising — the receiver loop must not die because the user clicked
+    Save.
     """
-    import pandas as pd  # local import keeps Parquet deps optional
+    try:
+        import pandas as pd  # local import keeps Parquet deps optional
+    except ImportError as exc:
+        print(
+            "[rtplot] Save Plot unavailable: "
+            f"pandas/pyarrow not installed in this build ({exc})."
+        )
+        return
 
     li = state["li"]
     num_datapoints_in_plot = state["num_datapoints_in_plot"]
@@ -677,7 +688,10 @@ async def zmq_receiver():
 
         elif category == SAVE_PLOT:
             log_name = await zmq_socket.recv_string()
-            save_current_plot(log_name)
+            try:
+                save_current_plot(log_name)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[rtplot] save_current_plot failed: {exc}")
 
         elif category == RECEIVED_DISPLAY:
             payload = await zmq_socket.recv_json()
@@ -1681,7 +1695,10 @@ async def handle_ws(request):
                     continue
                 ptype = payload.get("type")
                 if ptype == "save":
-                    save_current_plot(payload.get("name"))
+                    try:
+                        save_current_plot(payload.get("name"))
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[rtplot] save_current_plot failed: {exc}")
                 elif ptype == "configure_ip":
                     ip = payload.get("ip")
                     if ip:

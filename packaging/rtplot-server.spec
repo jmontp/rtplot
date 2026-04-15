@@ -36,8 +36,6 @@ a = Analysis(
         "zmq",
         "zmq.asyncio",
         "numpy",
-        "pandas",
-        "pyarrow",
         "rtplot.server_browser",
         "tkinter",
         "tkinter.ttk",
@@ -46,7 +44,13 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Keep the bundle lean — these are not used by the browser server.
+    # Everything here is excluded from the bundle to keep the download
+    # small. pandas + pyarrow together add ~92 MB uncompressed, almost
+    # all of which is pyarrow's arrow.dll / arrow_flight.dll. They are
+    # only needed by save_current_plot (Parquet output), and
+    # server_browser now handles the ImportError gracefully — so the
+    # browser UI still works fully, the Save Plot button just reports
+    # "pandas not installed" instead of crashing the receiver.
     excludes=[
         "matplotlib",
         "pyqtgraph",
@@ -55,6 +59,9 @@ a = Analysis(
         "PyQt6",
         "IPython",
         "jupyter",
+        "pandas",
+        "pyarrow",
+        "scipy",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
