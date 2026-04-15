@@ -4,9 +4,9 @@
 
 **rtplot** lets a Python script push live data to a plot window — locally, or
 across the network — with a few lines of code on the sender side. The plot
-window can be a traditional Qt application or a modern browser UI, and it
-also supports interactive controls (buttons, sliders, dials, text and
-numeric displays) that feed values back into the sending script in real time.
+window runs in any modern browser and supports interactive controls
+(buttons, sliders, dials, text and numeric displays) that feed values
+back into the sending script in real time.
 
 Typical use: a robot or data-acquisition script runs on a Raspberry Pi or
 microcontroller host, and you watch live signals and tweak gains from a
@@ -19,7 +19,6 @@ laptop on the same network.
 - [Highlights](#highlights)
 - [Install](#install)
 - [60-second quickstart](#60-second-quickstart)
-- [Choosing a server: browser vs. Qt](#choosing-a-server-browser-vs-qt)
 - [Interactive controls](#interactive-controls)
   - [Reading controls from Python](#reading-controls-from-python)
   - [Pushing values into displays](#pushing-values-into-displays)
@@ -36,18 +35,21 @@ laptop on the same network.
 
 ## Highlights
 
-- **Fast.** 500+ fps on a single trace on a modern laptop. Binary WebSocket
-  deltas on the browser server; raw Qt rendering on the desktop server.
-- **Two frontends.** A new browser-based server (aiohttp + uPlot) and the
-  original pyqtgraph desktop server. Both speak the same ZMQ protocol, so
-  client code is identical.
-- **Remote-friendly.** Either the sender or the plot host can bind — pick
-  whichever fits your network. Works across LAN, WSL, and SSH tunnels.
-- **Plot config lives with the data.** The sender declares the plot layout,
-  so a Pi running your experiment owns the look of its own dashboards.
-- **Interactive controls** *(browser server only)*. Declare buttons,
-  sliders, dials, numeric/text displays in the same `initialize_plots`
-  call. Poll from your tight loop; no threads, no callbacks.
+- **Fast.** Binary WebSocket deltas push data at up to 1 kHz, with
+  uPlot rendering the browser-side traces at 60 Hz. Easily handles
+  hundreds of frames per second on a single trace.
+- **Browser-based.** The plot window is served by aiohttp and rendered
+  by uPlot in any modern browser. No desktop GUI toolkit to install,
+  works over SSH port forwarding out of the box.
+- **Remote-friendly.** Either the sender or the plot host can bind —
+  pick whichever fits your network. Works across LAN, WSL, and SSH
+  tunnels.
+- **Plot config lives with the data.** The sender declares the plot
+  layout, so a Pi running your experiment owns the look of its own
+  dashboards.
+- **Interactive controls.** Declare buttons, sliders, dials,
+  numeric/text displays in the same `initialize_plots` call. Poll from
+  your tight loop; no threads, no callbacks.
 - **Save to Parquet** with a single button click or `client.save_plot()`
   call.
 
@@ -55,44 +57,40 @@ laptop on the same network.
 
 ## Install
 
-Minimum install — just the client (send data only):
-
-```bash
-pip install better-rtplot
-```
-
-Add the browser server (recommended):
+Install rtplot with the server bundle — this is the normal path and
+gets you everything:
 
 ```bash
 pip install "better-rtplot[browser]"
 ```
 
-Add the Qt/pyqtgraph server instead:
+This pulls `aiohttp` (for serving the plot UI) plus `pandas` + `pyarrow`
+(for saving runs to Parquet). If you only need the sender side — your
+script pushes data to someone else's plot host and you don't run a
+server locally — you can install the client-only minimum instead:
 
 ```bash
-pip install "better-rtplot[server]"
+pip install better-rtplot
 ```
 
-The `browser` extra pulls `aiohttp` + `pandas` + `pyarrow`; the `server`
-extra pulls `pyqtgraph` + `PySide6` + `pandas` + `pyarrow`. If you only
-`pip install better-rtplot` and try to launch a server, rtplot will print
-a friendly message telling you which extra to add.
+In that case, if you later try to launch a server locally you'll get a
+clear error telling you to add the `[browser]` extra.
 
-WSL users: the browser server works out of the box — open the URL it
-prints in your Windows browser. The Qt server needs an X server such as
-[VcXsrv](https://sourceforge.net/projects/vcxsrv/).
+WSL users: nothing extra needed. The plot window is served by HTTP, so
+just open the URL rtplot prints in your Windows browser.
 
 ---
 
 ## 60-second quickstart
 
-**Terminal 1 — start a plot window:**
+**Terminal 1 — start the plot server:**
 
 ```bash
-python -m rtplot.server_browser        # browser UI at http://localhost:8050
-# or
-python -m rtplot.server                 # desktop Qt window
+python -m rtplot.server_browser
 ```
+
+It prints a URL like `http://localhost:8050` — open that in your
+browser. The page stays blank until a client sends a plot config.
 
 **Terminal 2 — send data:**
 
@@ -109,31 +107,14 @@ for i in range(10000):
     time.sleep(0.01)
 ```
 
-That's it. Open http://localhost:8050 if you used the browser server; the
-Qt server will pop up its own window.
-
----
-
-## Choosing a server: browser vs. Qt
-
-| | **Browser server** (`rtplot.server_browser`) | **Qt server** (`rtplot.server`) |
-|---|---|---|
-| Frontend | aiohttp + uPlot in any modern browser | pyqtgraph + PySide6 desktop window |
-| Extra | `[browser]` | `[server]` |
-| Works over SSH | Yes (just forward the HTTP port) | No (needs X forwarding) |
-| Interactive controls | **Yes** — buttons, sliders, dials, displays | No |
-| Typical frame rate | 60 Hz render, 1000 Hz data push cap | 500+ fps |
-| Saves to Parquet | Yes | Yes |
-
-If you're on WSL, running remotely, or you want interactive controls,
-**use the browser server**. The Qt server is still available for local
-desktop use and for legacy setups.
+That's it. The browser tab you opened will start drawing the two
+traces in real time.
 
 ---
 
 ## Interactive controls
 
-*Browser server only.* Declare a control row inline in your plot layout:
+Declare a control row inline in your plot layout:
 
 ```python
 from rtplot import client
@@ -258,7 +239,8 @@ A styled plot dict accepts any of:
 
 Special row entries (not plots themselves):
 
-- `{"controls": [...]}` — a row of interactive controls (browser server only)
+- `{"controls": [...]}` — a row of interactive controls (see
+  [Interactive controls](#interactive-controls))
 - `{"non_plot_labels": ["name1", "name2"]}` — extra scalar names that ride
   along with `send_array` and get saved into the output Parquet file, but
   aren't rendered as traces
@@ -376,7 +358,7 @@ If you start running out of frames, try these, in roughly this order:
 
 ## CLI reference
 
-**Browser server** (`python -m rtplot.server_browser`):
+`python -m rtplot.server_browser` accepts:
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -391,14 +373,6 @@ If you start running out of frames, try these, in roughly this order:
 | `-d` / `--debug` | off | Extra debug logging |
 | `-sd DIR` / `--save-dir DIR` | cwd | Where to write `.parquet` saves |
 | `-sn NAME` / `--save-name NAME` | — | Prefix for saved filenames |
-
-**Qt server** (`python -m rtplot.server`): same `-p`, `-n`, `-a`, `-c`,
-`-d`, `-sd`, `-sn` flags as above, plus:
-
-| Flag | Meaning |
-|---|---|
-| `-b` / `--bigscreen` | Pre-configure for the neurobionics lab big-screen display |
-| `-t FILE` / `--plot_config FILE` | Load a plot configuration from a file on startup |
 
 ---
 
@@ -415,6 +389,3 @@ If you start running out of frames, try these, in roughly this order:
   python -m rtplot.server_browser &
   python -m rtplot.interactive_test
   ```
-
-![Qt server example 1](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example1.png)
-![Qt server example 2](https://github.com/jmontp/rtplot/blob/master/.images/rtplot_example2.png)
