@@ -19,7 +19,9 @@ ROOT = os.path.abspath(os.path.join(HERE, ".."))
 block_cipher = None
 
 a = Analysis(
-    [os.path.join(ROOT, "rtplot", "server_browser.py")],
+    # Entry point is the Tk GUI wrapper — it imports rtplot.server_browser
+    # under the hood and launches the aiohttp app in a background thread.
+    [os.path.join(ROOT, "rtplot", "server_browser_gui.py")],
     pathex=[ROOT],
     binaries=[],
     datas=[
@@ -36,13 +38,15 @@ a = Analysis(
         "numpy",
         "pandas",
         "pyarrow",
+        "rtplot.server_browser",
+        "tkinter",
+        "tkinter.ttk",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     # Keep the bundle lean — these are not used by the browser server.
     excludes=[
-        "tkinter",
         "matplotlib",
         "pyqtgraph",
         "PySide6",
