@@ -1,0 +1,111 @@
+name: Build rtplot-server binaries
+
+# Builds the rtplot browser server as a standalone binary for Windows,
+# Linux, and macOS on every tag push, and attaches the result to the
+# GitHub release. Also exposes a manual trigger so we can test the
+# pipeline without cutting a real release.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    strategy:
+      # Don't cancel the other matrix jobs if one platform fails —
+      # a failed build on one OS is useful to diagnose while the
+      # other platforms still ship.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+            binary: rtplot-server.exe
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            binary: rtplot-server
+          - os: macos-latest
+            platform: macos-arm64
+            binary: rtplot-server
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Tcl/Tk runtime (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-tk
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[browser]" pyinstaller
+
+      - name: Build rtplot-server
+        shell: bash
+        run: pyinstaller packaging/rtplot-server.spec --noconfirm
+
+      - name: Derive version label
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="dev-${GITHUB_SHA:0:7}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building rtplot-server $version for ${{ matrix.platform }}"
+
+      - name: Package binary for release
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          platform="${{ matrix.platform }}"
+          src="dist/${{ matrix.binary }}"
+          case "$platform" in
+            windows-x64)
+              # Windows: ship the .exe directly, renamed for release.
+              cp "$src" "dist/rtplot-server-${version}-${platform}.exe"
+              ;;
+            *)
+              # Linux / macOS: tar.gz so the execute bit on the binary
+              # survives the GitHub release asset round trip. Users run
+              # `tar -xzf ... && ./rtplot-server`.
+              chmod +x "$src"
+              tar -czf "dist/rtplot-server-${version}-${platform}.tar.gz" \
+                -C dist "${{ matrix.binary }}"
+              ;;
+          esac
+          ls -la dist/
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtplot-server-${{ matrix.platform }}
+          path: |
+            dist/rtplot-server-*-${{ matrix.platform }}.exe
+            dist/rtplot-server-*-${{ matrix.platform }}.tar.gz
+          if-no-files-found: ignore
+
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/rtplot-server-*-${{ matrix.platform }}.exe
+            dist/rtplot-server-*-${{ matrix.platform }}.tar.gz
