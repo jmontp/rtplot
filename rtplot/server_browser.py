@@ -818,27 +818,27 @@ INDEX_HTML = """<!doctype html>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; background: #fafafa; color: #222; }
   #header { display: flex; align-items: center; gap: 16px; padding: 8px 16px; background: #fff; border-bottom: 1px solid #ddd; position: sticky; top: 0; z-index: 10; }
-  #header h1 { margin: 0; font-size: 18px; font-weight: 600; }
-  #status { font-size: 14px; padding: 4px 10px; border-radius: 4px; background: #eee; }
+  #header h1 { margin: 0; font-size: calc(18px * var(--ui-scale)); font-weight: 600; }
+  #status { font-size: calc(14px * var(--ui-scale)); padding: 4px 10px; border-radius: 4px; background: #eee; }
   #status.green { background: #d4f5d4; color: #186a18; }
   #status.red { background: #f9d4d4; color: #8a1a1a; }
-  .btn { padding: 6px 12px; font-size: 14px; border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; }
+  .btn { padding: 6px 12px; font-size: calc(14px * var(--ui-scale)); border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; }
   .btn:hover { background: #f0f0f0; }
-  #ip-input { padding: 6px 8px; font-size: 13px; border: 1px solid #888; border-radius: 4px; width: 170px; font-family: monospace; }
-  #zmq-mode { font-size: 12px; color: #555; padding: 2px 8px; background: #eef; border-radius: 4px; }
-  #ws-status { font-size: 12px; color: #666; margin-left: auto; }
+  #ip-input { padding: 6px 8px; font-size: calc(13px * var(--ui-scale)); border: 1px solid #888; border-radius: 4px; width: 170px; font-family: monospace; }
+  #zmq-mode { font-size: calc(12px * var(--ui-scale)); color: #555; padding: 2px 8px; background: #eef; border-radius: 4px; }
+  #ws-status { font-size: calc(12px * var(--ui-scale)); color: #666; margin-left: auto; }
   #plots { display: flex; padding: 12px; gap: 12px; }
   #plots.row { flex-direction: column; }
   #plots.col { flex-direction: row; flex-wrap: wrap; }
   .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; flex: 1 1 auto; min-width: 320px; }
   .plot-title { font-size: 13px; font-weight: 600; margin: 0 0 4px 4px; color: #333; }
-  :root { --ctrl-unit-h: 38px; }
+  :root { --ctrl-unit-h: 38px; --ui-scale: 1; }
   .ctrl-row { display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: #fff; border: 1px solid #ddd; border-radius: 4px; flex-wrap: wrap; }
   .ctrl-item { display: flex; align-items: center; gap: 6px; }
   .ctrl-item.flex { flex: 1 1 220px; min-width: 200px; }
-  .ctrl-item label { font-size: 13px; color: #444; }
-  .ctrl-btn { padding: 8px 16px; font-size: 14px; border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; font-weight: 500; display: flex; align-items: center; justify-content: center; }
-  .ctrl-item-tall > .ctrl-btn { align-self: stretch; padding-top: 0; padding-bottom: 0; font-size: calc(14px + 2px); }
+  .ctrl-item label { font-size: calc(13px * var(--ui-scale)); color: #444; }
+  .ctrl-btn { padding: 8px 16px; font-size: calc(14px * var(--ui-scale)); border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; font-weight: 500; display: flex; align-items: center; justify-content: center; }
+  .ctrl-item-tall > .ctrl-btn { align-self: stretch; padding-top: 0; padding-bottom: 0; font-size: calc(16px * var(--ui-scale)); }
   .ctrl-item-tall > .ctrl-rangeinput,
   .ctrl-item-tall > .ctrl-dial,
   .ctrl-item-tall > .ctrl-numinput,
@@ -847,10 +847,10 @@ INDEX_HTML = """<!doctype html>
   .ctrl-btn:hover { background: #f0f0f0; }
   .ctrl-btn:active { background: #e2e2e2; }
   .ctrl-slider .ctrl-rangeinput { flex: 1; min-width: 120px; }
-  .ctrl-numinput { width: 72px; font-family: monospace; font-size: 13px; padding: 4px 6px; border: 1px solid #b8b8b8; border-radius: 3px; background: #fff; color: #222; text-align: right; -moz-appearance: textfield; }
+  .ctrl-numinput { width: 72px; font-family: monospace; font-size: calc(13px * var(--ui-scale)); padding: 4px 6px; border: 1px solid #b8b8b8; border-radius: 3px; background: #fff; color: #222; text-align: right; -moz-appearance: textfield; }
   .ctrl-numinput::-webkit-outer-spin-button,
   .ctrl-numinput::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-  .ctrl-nudgebtn { width: 26px; height: 26px; font-size: 15px; font-weight: 600; line-height: 1; padding: 0; border: 1px solid #b8b8b8; background: #f7f7f7; color: #333; cursor: pointer; border-radius: 3px; }
+  .ctrl-nudgebtn { width: 26px; height: 26px; font-size: calc(15px * var(--ui-scale)); font-weight: 600; line-height: 1; padding: 0; border: 1px solid #b8b8b8; background: #f7f7f7; color: #333; cursor: pointer; border-radius: 3px; }
   .ctrl-nudgebtn:hover { background: #e9e9e9; }
   .ctrl-nudgebtn:active { background: #dcdcdc; }
   .ctrl-dial { cursor: ns-resize; flex: 0 0 auto; touch-action: none; user-select: none; }
@@ -860,9 +860,24 @@ INDEX_HTML = """<!doctype html>
   .ctrl-dial .dial-arrow { fill: #c0c0c0; pointer-events: none; user-select: none; }
   .ctrl-dial:hover .dial-track { stroke: #888; }
   .ctrl-dial:hover .dial-arrow { fill: #888; }
-  .ctrl-val { font-family: monospace; font-size: 13px; min-width: 56px; text-align: right; color: #222; }
+  .ctrl-val { font-family: monospace; font-size: calc(13px * var(--ui-scale)); min-width: 56px; text-align: right; color: #222; }
   .ctrl-display .ctrl-val { background: #f3f3f3; padding: 4px 10px; border-radius: 3px; min-width: 72px; border: 1px solid #e2e2e2; }
-  .ctrl-textval { background: #eef3ff; padding: 6px 12px; border-radius: 3px; border: 1px solid #c8d6ff; color: #1a3a7a; text-align: left; min-width: 160px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; }
+  .ctrl-textval { background: #eef3ff; padding: 6px 12px; border-radius: 3px; border: 1px solid #c8d6ff; color: #1a3a7a; text-align: left; min-width: 160px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: calc(14px * var(--ui-scale)); }
+  #menu-btn { margin-left: 8px; width: 34px; height: 34px; padding: 0; font-size: calc(18px * var(--ui-scale)); line-height: 1; display: flex; align-items: center; justify-content: center; }
+  #menu-panel { position: fixed; top: 56px; right: 16px; background: #fff; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); padding: 16px 18px; min-width: 260px; z-index: 20; display: none; }
+  #menu-panel.open { display: block; }
+  #menu-panel h2 { margin: 0 0 10px 0; font-size: calc(14px * var(--ui-scale)); font-weight: 600; color: #333; text-transform: uppercase; letter-spacing: 0.03em; }
+  #menu-panel .menu-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+  #menu-panel .menu-row:last-child { margin-bottom: 0; }
+  #menu-panel label { font-size: calc(12px * var(--ui-scale)); color: #555; font-weight: 500; }
+  #menu-panel .menu-ctrl { display: flex; align-items: center; gap: 8px; }
+  #menu-panel input[type=range] { flex: 1; }
+  #menu-panel input[type=number] { width: 88px; font-family: monospace; font-size: calc(13px * var(--ui-scale)); padding: 4px 6px; border: 1px solid #b8b8b8; border-radius: 3px; text-align: right; -moz-appearance: textfield; }
+  #menu-panel input[type=number]::-webkit-outer-spin-button,
+  #menu-panel input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  #menu-panel .menu-val { font-family: monospace; font-size: calc(12px * var(--ui-scale)); min-width: 44px; text-align: right; color: #333; }
+  #menu-panel .menu-reset { margin-top: 6px; font-size: calc(11px * var(--ui-scale)); background: transparent; border: none; color: #2a5db0; cursor: pointer; padding: 2px 0; text-align: left; }
+  #menu-panel .menu-reset:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -875,6 +890,25 @@ INDEX_HTML = """<!doctype html>
     <button id=\"connect-btn\" class=\"btn\">Connect</button>
     <button id=\"bind-btn\" class=\"btn\">Bind</button>
     <div id=\"ws-status\">connecting...</div>
+    <button id=\"menu-btn\" class=\"btn\" title=\"Settings\" aria-label=\"Settings\">&#9776;</button>
+  </div>
+  <div id=\"menu-panel\" aria-hidden=\"true\">
+    <h2>Settings</h2>
+    <div class=\"menu-row\">
+      <label for=\"menu-font\">UI font scale</label>
+      <div class=\"menu-ctrl\">
+        <input id=\"menu-font\" type=\"range\" min=\"0.7\" max=\"2.0\" step=\"0.05\" value=\"1\" />
+        <span id=\"menu-font-val\" class=\"menu-val\">1.00x</span>
+      </div>
+    </div>
+    <div class=\"menu-row\">
+      <label for=\"menu-xrange\">Visible samples per plot</label>
+      <div class=\"menu-ctrl\">
+        <input id=\"menu-xrange\" type=\"number\" min=\"10\" step=\"10\" placeholder=\"auto\" />
+        <span class=\"menu-val\">samples</span>
+      </div>
+    </div>
+    <button id=\"menu-reset\" class=\"menu-reset\" type=\"button\">Reset to defaults</button>
   </div>
   <div id=\"plots\" class=\"row\"></div>
   <script src=\"/static/uPlot.iife.min.js\"></script>
@@ -905,6 +939,77 @@ INDEX_HTML = """<!doctype html>
       const connectBtn = document.getElementById('connect-btn');
       const bindBtn = document.getElementById('bind-btn');
       const zmqMode = document.getElementById('zmq-mode');
+      const menuBtn = document.getElementById('menu-btn');
+      const menuPanel = document.getElementById('menu-panel');
+      const menuFontInput = document.getElementById('menu-font');
+      const menuFontVal = document.getElementById('menu-font-val');
+      const menuXrangeInput = document.getElementById('menu-xrange');
+      const menuResetBtn = document.getElementById('menu-reset');
+
+      // ---- Persistent client-side settings (hamburger menu) ----
+      const SETTINGS_KEY = 'rtplotSettings.v1';
+      const DEFAULT_SETTINGS = { fontScale: 1.0, visibleSamples: null };
+      let settings = Object.assign({}, DEFAULT_SETTINGS);
+      try {
+        const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+        settings = Object.assign(settings, saved);
+      } catch (e) {}
+      function saveSettings() {
+        try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+      }
+      function applyFontScale() {
+        const s = Number(settings.fontScale) || 1;
+        document.documentElement.style.setProperty('--ui-scale', s);
+        menuFontInput.value = s;
+        menuFontVal.textContent = s.toFixed(2) + 'x';
+      }
+      function applyVisibleSamples() {
+        // Zoom uPlot's x scale to show only the newest N samples. If N is
+        // null/unset, or >= the plot's full xrange, show everything. This
+        // never adds data — it only hides older samples.
+        const n = settings.visibleSamples;
+        plots.forEach(p => {
+          let lo = 0, hi = p.xrange - 1;
+          if (n && Number.isFinite(n) && n > 0 && n < p.xrange) {
+            lo = p.xrange - n;
+          }
+          try { p.uplot.setScale('x', { min: lo, max: hi }); } catch (e) {}
+        });
+      }
+      function syncMenuInputs() {
+        menuFontInput.value = Number(settings.fontScale) || 1;
+        menuFontVal.textContent = (Number(settings.fontScale) || 1).toFixed(2) + 'x';
+        menuXrangeInput.value = settings.visibleSamples || '';
+      }
+      menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menuPanel.classList.toggle('open');
+      });
+      document.addEventListener('click', (e) => {
+        if (!menuPanel.classList.contains('open')) return;
+        if (menuPanel.contains(e.target) || menuBtn.contains(e.target)) return;
+        menuPanel.classList.remove('open');
+      });
+      menuFontInput.addEventListener('input', () => {
+        settings.fontScale = Number(menuFontInput.value);
+        applyFontScale();
+        saveSettings();
+      });
+      menuXrangeInput.addEventListener('change', () => {
+        const v = Number(menuXrangeInput.value);
+        settings.visibleSamples = (Number.isFinite(v) && v > 0) ? v : null;
+        applyVisibleSamples();
+        saveSettings();
+      });
+      menuResetBtn.addEventListener('click', () => {
+        settings = Object.assign({}, DEFAULT_SETTINGS);
+        saveSettings();
+        syncMenuInputs();
+        applyFontScale();
+        applyVisibleSamples();
+      });
+      applyFontScale();
+      syncMenuInputs();
 
       const HEADER_SIZE = 16;
       const MSG_SNAPSHOT = 0;
@@ -1367,6 +1472,7 @@ INDEX_HTML = """<!doctype html>
         totalTraces = traceOffset;
         applySliderValues(cfg.slider_values);
         applyDisplayValues(cfg.display_values);
+        applyVisibleSamples();
         scheduleRender();
       }
 
