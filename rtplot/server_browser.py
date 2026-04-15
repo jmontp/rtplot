@@ -890,6 +890,7 @@ INDEX_HTML = """<!doctype html>
   #menu-panel input[type=number]::-webkit-outer-spin-button,
   #menu-panel input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   #menu-panel .menu-val { font-family: monospace; font-size: calc(12px * var(--ui-scale)); min-width: 44px; text-align: right; color: #333; }
+  #menu-panel .menu-hint { font-size: calc(11px * var(--ui-scale)); color: #888; margin-top: 2px; }
   #menu-panel .menu-reset { margin-top: 6px; font-size: calc(11px * var(--ui-scale)); background: transparent; border: none; color: #2a5db0; cursor: pointer; padding: 2px 0; text-align: left; }
   #menu-panel .menu-reset:hover { text-decoration: underline; }
 </style>
@@ -921,6 +922,14 @@ INDEX_HTML = """<!doctype html>
         <input id=\"menu-xrange\" type=\"number\" min=\"10\" step=\"10\" placeholder=\"auto\" />
         <span class=\"menu-val\">samples</span>
       </div>
+    </div>
+    <div class=\"menu-row\">
+      <label for=\"menu-maxfps\">Max plot refresh rate</label>
+      <div class=\"menu-ctrl\">
+        <input id=\"menu-maxfps\" type=\"number\" min=\"1\" step=\"1\" placeholder=\"auto\" />
+        <span class=\"menu-val\">Hz</span>
+      </div>
+      <div id=\"menu-monitor-hint\" class=\"menu-hint\">Monitor: measuring…</div>
     </div>
     <button id=\"menu-reset\" class=\"menu-reset\" type=\"button\">Reset to defaults</button>
   </div>
@@ -958,11 +967,50 @@ INDEX_HTML = """<!doctype html>
       const menuFontInput = document.getElementById('menu-font');
       const menuFontVal = document.getElementById('menu-font-val');
       const menuXrangeInput = document.getElementById('menu-xrange');
+      const menuMaxfpsInput = document.getElementById('menu-maxfps');
+      const menuMonitorHint = document.getElementById('menu-monitor-hint');
       const menuResetBtn = document.getElementById('menu-reset');
+
+      // ---- Detect the monitor's refresh rate on page load ----
+      // Browsers deliberately don't expose the hardware refresh rate
+      // (fingerprinting), so we calibrate it by running rAF callbacks
+      // for ~500 ms and counting. requestAnimationFrame is locked to
+      // the display refresh, so frames_per_sec == monitor Hz as long
+      // as the tab is active during calibration.
+      let monitorHz = 0;
+      (function measureMonitorHz() {
+        let count = 0;
+        let start = 0;
+        function tick(t) {
+          if (start === 0) start = t;
+          count += 1;
+          const elapsed = t - start;
+          if (elapsed < 500) {
+            requestAnimationFrame(tick);
+          } else {
+            const measured = count * 1000 / elapsed;
+            // Snap to common refresh rates so users see clean numbers
+            // (60/75/90/120/144/165/240) instead of 59.8.
+            const common = [30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240];
+            let best = measured;
+            let bestDiff = Infinity;
+            for (const c of common) {
+              const d = Math.abs(measured - c);
+              if (d < bestDiff && d / c < 0.05) { bestDiff = d; best = c; }
+            }
+            monitorHz = Math.round(best);
+            if (menuMonitorHint) {
+              menuMonitorHint.textContent = `Monitor: ${monitorHz} Hz (rAF cap)`;
+            }
+            menuMaxfpsInput.placeholder = `auto = ${monitorHz}`;
+          }
+        }
+        requestAnimationFrame(tick);
+      })();
 
       // ---- Persistent client-side settings (hamburger menu) ----
       const SETTINGS_KEY = 'rtplotSettings.v1';
-      const DEFAULT_SETTINGS = { fontScale: 1.0, visibleSamples: null };
+      const DEFAULT_SETTINGS = { fontScale: 1.0, visibleSamples: null, maxFps: null };
       let settings = Object.assign({}, DEFAULT_SETTINGS);
       try {
         const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
@@ -994,6 +1042,7 @@ INDEX_HTML = """<!doctype html>
         menuFontInput.value = Number(settings.fontScale) || 1;
         menuFontVal.textContent = (Number(settings.fontScale) || 1).toFixed(2) + 'x';
         menuXrangeInput.value = settings.visibleSamples || '';
+        menuMaxfpsInput.value = settings.maxFps || '';
       }
       menuBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1013,6 +1062,11 @@ INDEX_HTML = """<!doctype html>
         const v = Number(menuXrangeInput.value);
         settings.visibleSamples = (Number.isFinite(v) && v > 0) ? v : null;
         applyVisibleSamples();
+        saveSettings();
+      });
+      menuMaxfpsInput.addEventListener('change', () => {
+        const v = Number(menuMaxfpsInput.value);
+        settings.maxFps = (Number.isFinite(v) && v > 0) ? v : null;
         saveSettings();
       });
       menuResetBtn.addEventListener('click', () => {
@@ -1490,26 +1544,65 @@ INDEX_HTML = """<!doctype html>
         scheduleRender();
       }
 
+      // Track render-FPS with a 1-second moving window so the status bar
+      // can show both the data rate (from the server) and the actual
+      // browser repaint rate.
+      let renderFrameCount = 0;
+      let renderFpsLastCheck = performance.now();
+      let renderFps = 0;
+
+      let lastRenderTime = 0;
+      function _doRender() {
+        pendingFrame = false;
+        // Update the render-FPS counter every repaint.
+        renderFrameCount += 1;
+        const now = performance.now();
+        if (now - renderFpsLastCheck >= 1000) {
+          renderFps = renderFrameCount * 1000 / (now - renderFpsLastCheck);
+          renderFrameCount = 0;
+          renderFpsLastCheck = now;
+          lastStatus.dirty = true;
+        }
+        lastRenderTime = now;
+        plots.forEach(p => {
+          const data = [p.xs];
+          for (let t = 0; t < p.traceCount; t++) data.push(p.buffers[t]);
+          // Default resetScales=true so y-axis auto-fits when no yrange
+          // was supplied. With explicit yrange, uPlot pins the scale and
+          // this is essentially a no-op.
+          p.uplot.setData(data);
+        });
+        if (lastStatus.dirty) {
+          const txt =
+            `Data ${lastStatus.fps.toFixed(0)} Hz  ·  Render ${renderFps.toFixed(0)} Hz` +
+            (lastStatus.nonPlot > 0 ? `  ·  non-plot ${lastStatus.nonPlot}` : '');
+          statusDiv.textContent = txt;
+          statusDiv.className = lastStatus.statusByte === 1 ? 'red' : 'green';
+          lastStatus.dirty = false;
+        }
+      }
+
       function scheduleRender() {
         if (pendingFrame) return;
         pendingFrame = true;
         requestAnimationFrame(() => {
-          pendingFrame = false;
-          plots.forEach(p => {
-            const data = [p.xs];
-            for (let t = 0; t < p.traceCount; t++) data.push(p.buffers[t]);
-            // Default resetScales=true so y-axis auto-fits when no yrange
-            // was supplied. With explicit yrange, uPlot pins the scale and
-            // this is essentially a no-op.
-            p.uplot.setData(data);
-          });
-          if (lastStatus.dirty) {
-            const txt = `Rate: ${lastStatus.fps.toFixed(0)} Hz` +
-              (lastStatus.nonPlot > 0 ? ` - Non Plot Trace: ${lastStatus.nonPlot}` : '');
-            statusDiv.textContent = txt;
-            statusDiv.className = lastStatus.statusByte === 1 ? 'red' : 'green';
-            lastStatus.dirty = false;
+          // FPS cap: if the user set a maxFps in the hamburger menu and
+          // we're within 1000/maxFps ms of the last actual repaint,
+          // reschedule ourselves a bit later via setTimeout instead of
+          // running the render now. This spaces repaints out without
+          // losing any data (the ring buffers keep accumulating).
+          const cap = Number(settings.maxFps) || 0;
+          if (cap > 0) {
+            const minInterval = 1000 / cap;
+            const now = performance.now();
+            const wait = minInterval - (now - lastRenderTime);
+            if (wait > 1) {
+              pendingFrame = false;
+              setTimeout(scheduleRender, wait);
+              return;
+            }
           }
+          _doRender();
         });
       }
 
