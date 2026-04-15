@@ -12,6 +12,7 @@ import datetime
 import json
 import os
 import struct
+import sys
 import time
 import webbrowser
 from collections import OrderedDict
@@ -20,6 +21,16 @@ from time import perf_counter
 import numpy as np
 import zmq
 import zmq.asyncio
+
+# pyzmq's asyncio integration needs event_loop.add_reader(), which the
+# Windows-default ProactorEventLoop (Python 3.8+) does not implement.
+# Without this policy override, zmq_receiver() throws on its very first
+# recv_string, the task dies silently, and any data the client pushes
+# after that gets dropped — the browser plot stays blank with no visible
+# error. Force SelectorEventLoop on Windows before any asyncio loop is
+# created so pyzmq's reader-based integration works.
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 try:
     from aiohttp import WSMsgType, web

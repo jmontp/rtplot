@@ -389,6 +389,11 @@ def _run_with_gui(args, rest):
     startup_error = {"value": None}
 
     def _server_thread():
+        # On Windows the default event loop policy is ProactorEventLoop,
+        # which pyzmq's asyncio integration cannot use (no add_reader).
+        # Force Selector before creating the loop so zmq_receiver() works.
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
