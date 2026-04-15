@@ -437,6 +437,7 @@ def build_config_message(config_dict):
                 "ylabel": plot_description.get("ylabel"),
                 "xrange": plot_description.get("xrange"),
                 "yrange": plot_description.get("yrange"),
+                "height": plot_description.get("height"),
             }
         )
     return {
@@ -831,11 +832,18 @@ INDEX_HTML = """<!doctype html>
   #plots.col { flex-direction: row; flex-wrap: wrap; }
   .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; flex: 1 1 auto; min-width: 320px; }
   .plot-title { font-size: 13px; font-weight: 600; margin: 0 0 4px 4px; color: #333; }
+  :root { --ctrl-unit-h: 38px; }
   .ctrl-row { display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: #fff; border: 1px solid #ddd; border-radius: 4px; flex-wrap: wrap; }
   .ctrl-item { display: flex; align-items: center; gap: 6px; }
   .ctrl-item.flex { flex: 1 1 220px; min-width: 200px; }
   .ctrl-item label { font-size: 13px; color: #444; }
-  .ctrl-btn { padding: 8px 16px; font-size: 14px; border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; font-weight: 500; }
+  .ctrl-btn { padding: 8px 16px; font-size: 14px; border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; font-weight: 500; display: flex; align-items: center; justify-content: center; }
+  .ctrl-item-tall > .ctrl-btn { align-self: stretch; padding-top: 0; padding-bottom: 0; font-size: calc(14px + 2px); }
+  .ctrl-item-tall > .ctrl-rangeinput,
+  .ctrl-item-tall > .ctrl-dial,
+  .ctrl-item-tall > .ctrl-numinput,
+  .ctrl-item-tall > .ctrl-nudgebtn,
+  .ctrl-item-tall > .ctrl-val { align-self: center; }
   .ctrl-btn:hover { background: #f0f0f0; }
   .ctrl-btn:active { background: #e2e2e2; }
   .ctrl-slider .ctrl-rangeinput { flex: 1; min-width: 120px; }
@@ -845,11 +853,13 @@ INDEX_HTML = """<!doctype html>
   .ctrl-nudgebtn { width: 26px; height: 26px; font-size: 15px; font-weight: 600; line-height: 1; padding: 0; border: 1px solid #b8b8b8; background: #f7f7f7; color: #333; cursor: pointer; border-radius: 3px; }
   .ctrl-nudgebtn:hover { background: #e9e9e9; }
   .ctrl-nudgebtn:active { background: #dcdcdc; }
-  .ctrl-dial { cursor: grab; flex: 0 0 auto; touch-action: none; user-select: none; }
-  .ctrl-dial-dragging { cursor: grabbing; }
-  .ctrl-dial .dial-track { fill: #fafafa; stroke: #bcbcbc; stroke-width: 2; }
-  .ctrl-dial .dial-indicator { stroke: #2a5db0; stroke-width: 3; stroke-linecap: round; }
+  .ctrl-dial { cursor: ns-resize; flex: 0 0 auto; touch-action: none; user-select: none; }
+  .ctrl-dial-dragging { cursor: ns-resize; }
+  .ctrl-dial .dial-track { fill: #fafafa; stroke: #bcbcbc; stroke-width: 2.5; }
+  .ctrl-dial .dial-indicator { stroke: #2a5db0; stroke-width: 4; stroke-linecap: round; }
+  .ctrl-dial .dial-arrow { fill: #c0c0c0; pointer-events: none; user-select: none; }
   .ctrl-dial:hover .dial-track { stroke: #888; }
+  .ctrl-dial:hover .dial-arrow { fill: #888; }
   .ctrl-val { font-family: monospace; font-size: 13px; min-width: 56px; text-align: right; color: #222; }
   .ctrl-display .ctrl-val { background: #f3f3f3; padding: 4px 10px; border-radius: 3px; min-width: 72px; border: 1px solid #e2e2e2; }
   .ctrl-textval { background: #eef3ff; padding: 6px 12px; border-radius: 3px; border: 1px solid #c8d6ff; color: #1a3a7a; text-align: left; min-width: 160px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; }
@@ -931,8 +941,10 @@ INDEX_HTML = """<!doctype html>
       }
 
       function makeScalarControl(el, renderWidget) {
-        const min = (el.min !== undefined) ? Number(el.min) : 0;
-        const max = (el.max !== undefined) ? Number(el.max) : 1;
+        const hasMin = el.min !== undefined && Number.isFinite(Number(el.min));
+        const hasMax = el.max !== undefined && Number.isFinite(Number(el.max));
+        const min = hasMin ? Number(el.min) : -Infinity;
+        const max = hasMax ? Number(el.max) : Infinity;
         const step = (el.step !== undefined && Number(el.step) > 0) ? Number(el.step) : 0.01;
         const fmt = parseDisplayFormat(el.format);
         const formatVal = (v) => (fmt && fmt.kind === 'fixed')
@@ -940,10 +952,11 @@ INDEX_HTML = """<!doctype html>
           : String(v);
         const clampRound = (v) => {
           v = Math.max(min, Math.min(max, Number(v)));
-          const snapped = Math.round((v - min) / step) * step + min;
+          const base = hasMin ? min : 0;
+          const snapped = Math.round((v - base) / step) * step + base;
           return Number(snapped.toFixed(10));
         };
-        let value = clampRound((el.value !== undefined) ? Number(el.value) : min);
+        let value = clampRound((el.value !== undefined) ? Number(el.value) : (hasMin ? min : 0));
 
         const item = document.createElement('div');
         item.className = 'ctrl-item ctrl-slider flex';
@@ -957,25 +970,32 @@ INDEX_HTML = """<!doctype html>
         const input = document.createElement('input');
         input.type = 'number';
         input.className = 'ctrl-numinput';
-        input.min = min;
-        input.max = max;
+        if (hasMin) input.min = min;
+        if (hasMax) input.max = max;
         input.step = step;
         input.value = formatVal(value);
 
-        const applyLocal = (v) => {
+        // fromDrag is true when the scalar control is being updated by a
+        // widget's own drag handler — in that case the widget already owns
+        // its visual state and setValue should not reset it.
+        const applyLocal = (v, fromDrag) => {
           value = clampRound(v);
           input.value = formatVal(value);
-          if (widget && widget.setValue) widget.setValue(value);
+          if (widget && widget.setValue) widget.setValue(value, !!fromDrag);
         };
-        const commit = (v) => {
-          applyLocal(v);
+        const commit = (v, fromDrag) => {
+          applyLocal(v, fromDrag);
           sendCtrl({ type: 'control_slider', id: el.id, value: Number(value) });
         };
 
         const sensitivity = (el.sensitivity !== undefined && Number.isFinite(Number(el.sensitivity)))
           ? Number(el.sensitivity)
           : 1.0;
-        widget = renderWidget({ min, max, step, initial: value, commit, applyLocal, sensitivity });
+        widget = renderWidget({
+          min, max, step, initial: value,
+          commit, applyLocal,
+          sensitivity, hasMin, hasMax,
+        });
         if (widget && widget.node) item.appendChild(widget.node);
 
         const minusBtn = document.createElement('button');
@@ -1004,35 +1024,42 @@ INDEX_HTML = """<!doctype html>
         plusBtn.addEventListener('click', () => commit(value + step));
         item.appendChild(plusBtn);
 
-        controlElements.sliders[el.id] = { setValue: applyLocal };
+        controlElements.sliders[el.id] = { setValue: (v) => applyLocal(v, false) };
         if (fmt) controlElements.displayFormats[el.id] = fmt;
         return item;
       }
 
-      function buildSliderWidget({ min, max, step, initial, commit }) {
+      function buildSliderWidget({ min, max, step, initial, commit, applyLocal, hasMin, hasMax }) {
+        // HTML range inputs can't represent unbounded values, so fall back
+        // to sane defaults when the user omits min/max on a slider.
+        const rangeMin = hasMin ? min : 0;
+        const rangeMax = hasMax ? max : 1;
         const range = document.createElement('input');
         range.type = 'range';
         range.className = 'ctrl-rangeinput';
-        range.min = min;
-        range.max = max;
+        range.min = rangeMin;
+        range.max = rangeMax;
         range.step = step;
         range.value = initial;
-        range.addEventListener('change', () => commit(Number(range.value)));
+        // Live preview: update the number box (and any other mirrors) on every
+        // drag tick, but only actually send the value to Python on release.
+        range.addEventListener('input', () => applyLocal(Number(range.value), true));
+        range.addEventListener('change', () => commit(Number(range.value), true));
         return {
           node: range,
-          setValue: (v) => { range.value = v; },
+          setValue: (v, fromDrag) => { range.value = v; },
         };
       }
 
-      function buildDialWidget({ min, max, initial, commit, sensitivity }) {
+      function buildDialWidget({ min, max, initial, commit, applyLocal, sensitivity, hasMin, hasMax }) {
         const svgNS = 'http://www.w3.org/2000/svg';
-        const size = 72;
+        const size = 100;
         const svg = document.createElementNS(svgNS, 'svg');
         svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
         svg.setAttribute('width', size);
         svg.setAttribute('height', size);
         svg.classList.add('ctrl-dial');
-        const cx = size / 2, cy = size / 2, r = size / 2 - 7;
+        const cx = size / 2, cy = size / 2, r = size / 2 - 8;
 
         const track = document.createElementNS(svgNS, 'circle');
         track.setAttribute('cx', cx);
@@ -1041,54 +1068,75 @@ INDEX_HTML = """<!doctype html>
         track.classList.add('dial-track');
         svg.appendChild(track);
 
+        // Up/down arrows as drag-direction hints, inside the circle at the
+        // 12 and 6 o'clock positions. Drawn as polygons (rather than text
+        // glyphs) so they scale with the SVG viewBox when the dial is
+        // resized via the `height` multiplier.
+        const mkArrow = (pointsUp, y) => {
+          const p = document.createElementNS(svgNS, 'polygon');
+          const w = 7, h = 6;
+          const pts = pointsUp
+            ? `${cx},${y - h / 2} ${cx - w / 2},${y + h / 2} ${cx + w / 2},${y + h / 2}`
+            : `${cx - w / 2},${y - h / 2} ${cx + w / 2},${y - h / 2} ${cx},${y + h / 2}`;
+          p.setAttribute('points', pts);
+          p.classList.add('dial-arrow');
+          return p;
+        };
+        svg.appendChild(mkArrow(true,  cy - r + 9));
+        svg.appendChild(mkArrow(false, cy + r - 9));
+
         const indicator = document.createElementNS(svgNS, 'line');
         indicator.classList.add('dial-indicator');
         svg.appendChild(indicator);
 
-        let current = initial;
-        function renderAt(v) {
-          current = v;
-          const frac = (max === min) ? 0 : (v - min) / (max - min);
-          const theta = ((-135 + 270 * frac) * Math.PI / 180);
-          const x2 = cx + (r - 4) * Math.sin(theta);
-          const y2 = cy - (r - 4) * Math.cos(theta);
+        // Unified rotation math: the indicator advances by 2π radians for
+        // every `valuePerRotation` units of value change, in either
+        // direction. Hardstops fall out naturally — when value clamps,
+        // the per-tick delta is 0 and the indicator stops. sensitivity
+        // sets how much of the value range one rotation covers:
+        //   bounded:   valuePerRotation = (max - min) * sensitivity
+        //              sensitivity=1    -> 1 rotation per range
+        //              sensitivity=0.2  -> 5 rotations per range
+        //   unbounded: valuePerRotation = sensitivity directly
+        //              (raw value units per rotation)
+        const bothBounded = hasMin && hasMax;
+        const refRange = bothBounded ? (max - min) : 1;
+        const valuePerRotation = refRange * sensitivity;
+        const PX_PER_ROTATION = 100;
+        const BASE_ANGLE = (-135 * Math.PI) / 180;
+
+        let currentValue = initial;
+        let currentAngle = BASE_ANGLE;
+
+        function drawIndicator() {
+          const x2 = cx + (r - 4) * Math.sin(currentAngle);
+          const y2 = cy - (r - 4) * Math.cos(currentAngle);
           indicator.setAttribute('x1', cx);
           indicator.setAttribute('y1', cy);
           indicator.setAttribute('x2', x2);
           indicator.setAttribute('y2', y2);
         }
-        renderAt(current);
+        drawIndicator();
 
-        // Angular drag: track the pointer angle from the dial center and
-        // accumulate signed deltas so the user can spin the dial "round and
-        // round" — each full turn maps to (max-min) * sensitivity of value.
-        // sensitivity > 1 => coarser, sensitivity < 1 => finer control.
+        // Vertical drag: drag up = value increases. 100 px of drag =
+        // one full indicator rotation = valuePerRotation units of value
+        // change. When value is pinned at a hardstop, delta = 0 and the
+        // indicator stops too.
         svg.addEventListener('pointerdown', (e) => {
-          const rect = svg.getBoundingClientRect();
-          const cxGlobal = rect.left + rect.width / 2;
-          const cyGlobal = rect.top + rect.height / 2;
-          let prevAngle = Math.atan2(e.clientY - cyGlobal, e.clientX - cxGlobal);
-          let accumulated = 0;
-          const startV = current;
-          const range = (max - min) || 1;
+          const startY = e.clientY;
+          const startV = currentValue;
           svg.classList.add('ctrl-dial-dragging');
 
           const onMove = (em) => {
-            const a = Math.atan2(em.clientY - cyGlobal, em.clientX - cxGlobal);
-            let delta = a - prevAngle;
-            if (delta > Math.PI) delta -= 2 * Math.PI;
-            else if (delta < -Math.PI) delta += 2 * Math.PI;
-            accumulated += delta;
-            prevAngle = a;
-            let v = startV + (accumulated / (2 * Math.PI)) * range * sensitivity;
-            v = Math.max(min, Math.min(max, v));
-            renderAt(v);
+            const dy = startY - em.clientY;  // positive when dragging up
+            const target = startV + (dy / PX_PER_ROTATION) * valuePerRotation;
+            applyLocal(target, true);
           };
           const onUp = () => {
             document.removeEventListener('pointermove', onMove);
             document.removeEventListener('pointerup', onUp);
             svg.classList.remove('ctrl-dial-dragging');
-            commit(current);
+            commit(currentValue, true);
           };
           document.addEventListener('pointermove', onMove);
           document.addEventListener('pointerup', onUp, { once: true });
@@ -1098,7 +1146,22 @@ INDEX_HTML = """<!doctype html>
 
         return {
           node: svg,
-          setValue: (v) => { renderAt(v); },
+          setValue: (v, fromDrag) => {
+            if (fromDrag) {
+              // Incremental update during a drag: rotate the indicator by
+              // the delta since the last set, which implicitly pins it
+              // when value clamps at a hardstop.
+              const delta = v - currentValue;
+              currentAngle += (delta / valuePerRotation) * 2 * Math.PI;
+            } else {
+              // External update (e.g. seeded server value on reconnect):
+              // snap back to the base angle so we have a known starting
+              // point for the next drag.
+              currentAngle = BASE_ANGLE;
+            }
+            currentValue = v;
+            drawIndicator();
+          },
         };
       }
 
@@ -1147,10 +1210,35 @@ INDEX_HTML = """<!doctype html>
         return item;
       }
 
+      function applyElementSize(item, el) {
+        // height: per-element multiplier on the standard row height. Lets
+        // users declare e.g. `{"type":"button","height":2}` to get a bigger
+        // click target, or `{"type":"dial","height":2}` to get a bigger
+        // knob. Values other than 1 set a min-height on the wrapper and,
+        // for buttons, make the button stretch to fill it. For dials the
+        // nested SVG itself is resized so the knob actually grows.
+        const h = Number(el.height);
+        if (Number.isFinite(h) && h > 0 && h !== 1) {
+          item.style.minHeight = `calc(var(--ctrl-unit-h) * ${h})`;
+          if (h > 1) item.classList.add('ctrl-item-tall');
+          const dial = item.querySelector('.ctrl-dial');
+          if (dial) {
+            const base = Number(dial.getAttribute('width')) || 100;
+            const newSize = Math.round(base * h);
+            dial.setAttribute('width', newSize);
+            dial.setAttribute('height', newSize);
+          }
+        }
+      }
+
       function buildControlRow(row) {
         const div = document.createElement('div');
         div.className = 'ctrl-row';
-        row.forEach(el => div.appendChild(buildControlElement(el)));
+        row.forEach(el => {
+          const item = buildControlElement(el);
+          applyElementSize(item, el);
+          div.appendChild(item);
+        });
         return div;
       }
 
@@ -1204,9 +1292,14 @@ INDEX_HTML = """<!doctype html>
           });
         }
 
+        const baseHeight = rowLayout ? 260 : 320;
+        const heightMul = Number(pcfg.height);
+        const plotHeight = (Number.isFinite(heightMul) && heightMul > 0)
+          ? Math.round(baseHeight * heightMul)
+          : baseHeight;
         const opts = {
           width: Math.max(640, plotsDiv.clientWidth - 40),
-          height: rowLayout ? 260 : 320,
+          height: plotHeight,
           title: pcfg.title || '',
           scales: {
             x: { time: false, range: [0, xrange - 1] },

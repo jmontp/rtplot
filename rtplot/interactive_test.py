@@ -108,13 +108,14 @@ def main():
         "colors": ["b"],
         "title": "Interactive Controls Test",
         "yrange": [-1.5, 1.5],
+        "height": 1.5,
     }
     controls_row_prompt = {"controls": [
         {"type": "text", "id": "prompt", "label": "Task",
          "value": "Starting..."},
     ]}
     controls_row_buttons = {"controls": [
-        {"type": "button", "id": "start", "label": "Start"},
+        {"type": "button", "id": "start", "label": "Start", "height": 2},
         {"type": "button", "id": "stop", "label": "Stop"},
         {"type": "button", "id": "fail", "label": "Abort"},
     ]}
@@ -125,7 +126,7 @@ def main():
     controls_row_dial = {"controls": [
         {"type": "dial", "id": "freq", "label": "Freq (Hz)",
          "min": 0.1, "max": 5.0, "value": 1.0, "step": 0.05,
-         "sensitivity": 0.5, "format": "{:.2f}"},
+         "sensitivity": 0.2, "format": "{:.2f}", "height": 2},
     ]}
     controls_row_status = {"controls": [
         {"type": "text", "id": "status", "label": "Status",
