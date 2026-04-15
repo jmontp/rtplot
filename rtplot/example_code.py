@@ -205,7 +205,7 @@ plot_config2 = {'names' : ['plot2_trace1'],
 #Add non-plot data labels
 non_plot_config = {"non_plot_labels" : ['non_plot_test_data_1',
                                         "non_plot_test_data_2"]}
-                
+
 client.initialize_plots([plot_config1, plot_config2,non_plot_config])
 
 
@@ -226,6 +226,68 @@ for i in range(1000):
 
     #Send data
     client.send_array(data)
+#------------------------------------------------------------------------------
+
+
+time.sleep(2)
+
+
+#------------------------------------------------------------------------------
+# Configurable UI controls: buttons, sliders, and display boxes.
+#
+# A 'controls' row goes alongside plot rows in the same initialize_plots call.
+# Each row holds a small number of elements. Poll the return channel from
+# your loop to read the latest slider values and any button events that
+# fired since the previous poll, and push read-only values into the
+# display boxes with client.set_display().
+plot_config = {
+    'names': ['signal'],
+    'colors': ['b'],
+    'title': 'Controls demo',
+    'ylabel': 'amplitude',
+    'yrange': [-6, 6],
+}
+
+controls_row_1 = {'controls': [
+    {'type': 'button', 'id': 'reset', 'label': 'Reset t'},
+    {'type': 'button', 'id': 'pause', 'label': 'Pause'},
+    {'type': 'slider', 'id': 'gain', 'label': 'Gain',
+     'min': 0, 'max': 5, 'value': 1.0, 'step': 0.1, 'format': '{:.2f}'},
+]}
+controls_row_2 = {'controls': [
+    {'type': 'slider', 'id': 'freq', 'label': 'Freq (Hz)',
+     'min': 0.1, 'max': 5.0, 'value': 1.0, 'step': 0.1, 'format': '{:.2f}'},
+    {'type': 'display', 'id': 't', 'label': 't (s)', 'format': '{:.2f}'},
+    {'type': 'display', 'id': 'amp', 'label': 'amp', 'format': '{:.2f}'},
+]}
+
+client.initialize_plots([plot_config, controls_row_1, controls_row_2])
+
+running = True
+t0 = time.time()
+for i in range(5000):
+    ctrl = client.poll_controls()
+    for btn in ctrl.buttons:
+        if btn == 'reset':
+            t0 = time.time()
+        elif btn == 'pause':
+            running = not running
+
+    gain = ctrl.values.get('gain', 1.0)
+    freq = ctrl.values.get('freq', 1.0)
+
+    if running:
+        t = time.time() - t0
+        amp = gain * np.sin(2 * np.pi * freq * t)
+    else:
+        t = time.time() - t0
+        amp = 0.0
+
+    client.set_display('t', t)
+    client.set_display('amp', amp)
+    client.send_array(amp)
+
+    time.sleep(0.01)
 #------------------------------------------------------------------------------
 
 

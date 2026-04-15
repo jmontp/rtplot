@@ -190,6 +190,17 @@ state = {
     "skip": SKIP_PLOT_DATAPOINTS,
     "data_rate_counter": 0,
     "data_between_adaptations": 0,
+    # Layout ordering: list of {"kind": "plot", "index": N} or
+    # {"kind": "controls", "index": N} entries in the order the user supplied.
+    "layout": [],
+    # List of rows, each a list of control element dicts.
+    "control_rows": [],
+    # Current slider values keyed by element id (seeded from 'value').
+    "slider_values": {},
+    # Latest display-box values keyed by element id (pushed via set_display).
+    "display_values": {},
+    # Set of display ids with a pending browser broadcast.
+    "display_dirty": set(),
 }
 
 
@@ -216,11 +227,24 @@ def parse_config(json_config):
     traces_per_plot = []
     trace_info = []
     non_plot_labels = []
+    control_rows = []
+    slider_values = {}
+    layout = []
     num_datapoints_in_plot = DEFAULT_NUM_DATAPOINTS_IN_PLOT
 
-    for plot_num, plot_description in enumerate(json_config.values()):
+    plot_counter = 0
+    for plot_description in json_config.values():
         if "non_plot_labels" in plot_description:
             non_plot_labels = plot_description["non_plot_labels"]
+            continue
+
+        if "controls" in plot_description:
+            row = plot_description["controls"]
+            for element in row:
+                if element.get("type") in ("slider", "dial") and "value" in element:
+                    slider_values[element["id"]] = float(element["value"])
+            layout.append({"kind": "controls", "index": len(control_rows)})
+            control_rows.append(row)
             continue
 
         trace_names = plot_description["names"]
@@ -230,11 +254,29 @@ def parse_config(json_config):
             num_datapoints_in_plot = plot_description["xrange"]
 
         for name in trace_names:
-            trace_info.append((name, plot_num))
+            trace_info.append((name, plot_counter))
+
+        layout.append({"kind": "plot", "index": plot_counter})
+        plot_counter += 1
 
     state["traces_per_plot"] = traces_per_plot
     state["trace_labels"] = trace_info
     state["non_plot_labels"] = non_plot_labels
+    state["control_rows"] = control_rows
+    # Preserve display values across re-init when the same ids are reused;
+    # drop ids that are no longer declared so stale data doesn't linger.
+    active_display_ids = {
+        el["id"]
+        for row in control_rows
+        for el in row
+        if el.get("type") == "display"
+    }
+    state["display_values"] = {
+        k: v for k, v in state["display_values"].items() if k in active_display_ids
+    }
+    state["display_dirty"] = {d for d in state["display_dirty"] if d in active_display_ids}
+    state["slider_values"] = slider_values
+    state["layout"] = layout
 
     num_traces = sum(traces_per_plot)
     reset_buffer_state(num_datapoints_in_plot, num_traces, len(non_plot_labels))
@@ -364,6 +406,8 @@ def build_config_message(config_dict):
         if "non_plot_labels" in plot_description:
             non_plot_labels = plot_description["non_plot_labels"]
             continue
+        if "controls" in plot_description:
+            continue
         plots.append(
             {
                 "key": key,
@@ -382,6 +426,10 @@ def build_config_message(config_dict):
         "type": "config",
         "plots": plots,
         "non_plot_labels": non_plot_labels,
+        "controls": state["control_rows"],
+        "layout": state["layout"],
+        "slider_values": dict(state["slider_values"]),
+        "display_values": dict(state["display_values"]),
         "row_layout": bool(NEW_SUBPLOT_IN_ROW),
     }
 
@@ -391,16 +439,23 @@ def build_config_message(config_dict):
 ###############
 
 ZMQ_DEFAULT_PORT = 5555
+ZMQ_CONTROL_PORT = ZMQ_DEFAULT_PORT + 1
 zmq_ctx = zmq.asyncio.Context()
 zmq_socket = None
+control_push_socket = None
 
 # Live description of the current ZMQ wiring, used by the browser status pill
 # and reported back to clients on connect/reconfigure.
 zmq_status = {"mode": "bind", "target": f"*:{ZMQ_DEFAULT_PORT}"}
 
 
-def _normalize_connect_target(ip):
-    """Return ``(tcp://...endpoint, host:port label)`` for a user-supplied IP."""
+def _normalize_connect_target(ip, port=ZMQ_DEFAULT_PORT):
+    """Return ``(tcp://...endpoint, host:port label)`` for a user-supplied IP.
+
+    ``port`` is the default port used when the caller only supplies a host.
+    When the caller supplies a host + port, that port is honored and ``port``
+    is ignored.
+    """
     ip = ip.strip()
     if ip.startswith("tcp://"):
         endpoint = ip
@@ -409,9 +464,26 @@ def _normalize_connect_target(ip):
         endpoint = f"tcp://{ip}"
         label = ip
     else:
-        endpoint = f"tcp://{ip}:{ZMQ_DEFAULT_PORT}"
-        label = f"{ip}:{ZMQ_DEFAULT_PORT}"
+        endpoint = f"tcp://{ip}:{port}"
+        label = f"{ip}:{port}"
     return endpoint, label
+
+
+def _control_target_from_data(ip):
+    """Given a data-socket IP spec, derive the matching control-socket IP spec.
+
+    The control channel lives at ``data_port + 1``. If the user provided an
+    explicit port, we bump it by 1; otherwise we default to ``ZMQ_CONTROL_PORT``.
+    """
+    ip = ip.strip()
+    raw = ip[len("tcp://"):] if ip.startswith("tcp://") else ip
+    if raw.count(":") >= 1:
+        host, port_str = raw.rsplit(":", 1)
+        try:
+            return f"{host}:{int(port_str) + 1}"
+        except ValueError:
+            return f"{host}:{ZMQ_CONTROL_PORT}"
+    return f"{raw}:{ZMQ_CONTROL_PORT}"
 
 
 def _open_zmq_socket(connect_ip=None):
@@ -432,11 +504,46 @@ def _open_zmq_socket(connect_ip=None):
     return sock
 
 
+def _open_control_socket(connect_ip=None):
+    """Create the return-channel PUSH socket aligned with the data socket.
+
+    Mirrors the bind/connect orientation of _open_zmq_socket so calling
+    Connect/Bind in the browser reconfigures both sockets consistently.
+    """
+    sock = zmq_ctx.socket(zmq.PUSH)
+    sock.setsockopt(zmq.SNDHWM, 1000)
+    # Don't linger on close — stale events should be dropped on reconfigure.
+    sock.setsockopt(zmq.LINGER, 0)
+    if connect_ip:
+        control_ip = _control_target_from_data(connect_ip)
+        endpoint, _ = _normalize_connect_target(control_ip, port=ZMQ_CONTROL_PORT)
+        sock.connect(endpoint)
+        print(f"ZMQ control: connected to {endpoint}")
+    else:
+        sock.bind(f"tcp://*:{ZMQ_CONTROL_PORT}")
+        print(f"ZMQ control: bound on tcp://*:{ZMQ_CONTROL_PORT}")
+    return sock
+
+
 zmq_socket = _open_zmq_socket(connect_ip=args.pi_ip)
+control_push_socket = _open_control_socket(connect_ip=args.pi_ip)
 
 RECEIVED_PLOT_UPDATE = 0
 RECEIVED_DATA = 1
 SAVE_PLOT = 3
+RECEIVED_DISPLAY = 4
+
+
+async def send_control_event(event):
+    """Forward a control event to the user's Python process, best-effort."""
+    if control_push_socket is None:
+        return
+    try:
+        await control_push_socket.send_json(event, flags=zmq.DONTWAIT)
+    except zmq.Again:
+        pass
+    except zmq.ZMQError:
+        pass
 
 
 async def recv_array_async():
@@ -492,6 +599,10 @@ async def zmq_receiver():
             snap = make_snapshot_message()
             if snap is not None:
                 await broadcast_binary(snap)
+            # Echo seeded slider defaults back to the client so its first
+            # poll_controls() call already sees the declared initial values.
+            for sid, svalue in state["slider_values"].items():
+                await send_control_event({"type": "slider", "id": sid, "value": svalue})
 
         elif category == RECEIVED_DATA:
             arr = await recv_array_async()
@@ -550,6 +661,18 @@ async def zmq_receiver():
             log_name = await zmq_socket.recv_string()
             save_current_plot(log_name)
 
+        elif category == RECEIVED_DISPLAY:
+            payload = await zmq_socket.recv_json()
+            display_id = payload.get("id")
+            value = payload.get("value")
+            if display_id is None:
+                continue
+            if not isinstance(value, (int, float, str)):
+                continue
+            if state["display_values"].get(display_id) != value:
+                state["display_values"][display_id] = value
+                state["display_dirty"].add(display_id)
+
 
 async def reconfigure_zmq(app, connect_ip=None):
     """Tear down the running receiver, swap the socket, restart the receiver.
@@ -559,6 +682,7 @@ async def reconfigure_zmq(app, connect_ip=None):
     so the browser doesn't show data from the previous source.
     """
     global zmq_socket
+    global control_push_socket
 
     old_task = app.get("zmq_task")
     if old_task is not None:
@@ -572,6 +696,11 @@ async def reconfigure_zmq(app, connect_ip=None):
         zmq_socket.close(0)
     except Exception:  # noqa: BLE001
         pass
+    try:
+        if control_push_socket is not None:
+            control_push_socket.close(0)
+    except Exception:  # noqa: BLE001
+        pass
 
     try:
         zmq_socket = _open_zmq_socket(connect_ip=connect_ip)
@@ -579,11 +708,23 @@ async def reconfigure_zmq(app, connect_ip=None):
         # Fall back to bind so the server keeps running and tell the browser.
         print(f"ZMQ reconfigure failed ({exc}); falling back to bind")
         zmq_socket = _open_zmq_socket(connect_ip=None)
+        connect_ip = None
+
+    try:
+        control_push_socket = _open_control_socket(connect_ip=connect_ip)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ZMQ control reconfigure failed ({exc}); control channel offline")
+        control_push_socket = None
 
     state["initialized"] = False
     state["config_message"] = None
     state["num_traces"] = 0
     state["last_pushed_li"] = state["li"]
+    state["control_rows"] = []
+    state["layout"] = []
+    state["slider_values"] = {}
+    state["display_values"] = {}
+    state["display_dirty"] = set()
 
     await broadcast_zmq_status()
     app["zmq_task"] = asyncio.create_task(zmq_receiver())
@@ -593,6 +734,21 @@ async def broadcast_zmq_status():
     await broadcast_text(
         {"type": "zmq_status", "mode": zmq_status["mode"], "target": zmq_status["target"]}
     )
+
+
+async def display_pusher():
+    """Push any dirty display-box values to browsers at ~30 Hz."""
+    target_dt = 1.0 / 30.0
+    while True:
+        await asyncio.sleep(target_dt)
+        if not ws_clients:
+            continue
+        dirty = state["display_dirty"]
+        if not dirty:
+            continue
+        values = {k: state["display_values"][k] for k in dirty}
+        state["display_dirty"] = set()
+        await broadcast_text({"type": "display_update", "values": values})
 
 
 async def ws_pusher():
@@ -658,6 +814,27 @@ INDEX_HTML = """<!doctype html>
   #plots.col { flex-direction: row; flex-wrap: wrap; }
   .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; flex: 1 1 auto; min-width: 320px; }
   .plot-title { font-size: 13px; font-weight: 600; margin: 0 0 4px 4px; color: #333; }
+  .ctrl-row { display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: #fff; border: 1px solid #ddd; border-radius: 4px; flex-wrap: wrap; }
+  .ctrl-item { display: flex; align-items: center; gap: 6px; }
+  .ctrl-item.flex { flex: 1 1 220px; min-width: 200px; }
+  .ctrl-item label { font-size: 13px; color: #444; }
+  .ctrl-btn { padding: 8px 16px; font-size: 14px; border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; font-weight: 500; }
+  .ctrl-btn:hover { background: #f0f0f0; }
+  .ctrl-btn:active { background: #e2e2e2; }
+  .ctrl-slider .ctrl-rangeinput { flex: 1; min-width: 120px; }
+  .ctrl-numinput { width: 72px; font-family: monospace; font-size: 13px; padding: 4px 6px; border: 1px solid #b8b8b8; border-radius: 3px; background: #fff; color: #222; text-align: right; -moz-appearance: textfield; }
+  .ctrl-numinput::-webkit-outer-spin-button,
+  .ctrl-numinput::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .ctrl-nudgebtn { width: 26px; height: 26px; font-size: 15px; font-weight: 600; line-height: 1; padding: 0; border: 1px solid #b8b8b8; background: #f7f7f7; color: #333; cursor: pointer; border-radius: 3px; }
+  .ctrl-nudgebtn:hover { background: #e9e9e9; }
+  .ctrl-nudgebtn:active { background: #dcdcdc; }
+  .ctrl-dial { cursor: ns-resize; flex: 0 0 auto; }
+  .ctrl-dial .dial-track { fill: #fafafa; stroke: #bcbcbc; stroke-width: 2; }
+  .ctrl-dial .dial-indicator { stroke: #2a5db0; stroke-width: 3; stroke-linecap: round; }
+  .ctrl-dial:hover .dial-track { stroke: #888; }
+  .ctrl-val { font-family: monospace; font-size: 13px; min-width: 56px; text-align: right; color: #222; }
+  .ctrl-display .ctrl-val { background: #f3f3f3; padding: 4px 10px; border-radius: 3px; min-width: 72px; border: 1px solid #e2e2e2; }
+  .ctrl-textval { background: #eef3ff; padding: 6px 12px; border-radius: 3px; border: 1px solid #c8d6ff; color: #1a3a7a; text-align: left; min-width: 160px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -710,12 +887,329 @@ INDEX_HTML = """<!doctype html>
       let socket = null;
       let pendingFrame = false;
       let lastStatus = { fps: 0, statusByte: 0, nonPlot: 0, dirty: true };
+      const controlElements = { displays: {}, displayFormats: {}, displayKinds: {}, sliders: {} };
+
+      function sendCtrl(msg) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify(msg));
+        }
+      }
+
+      function parseDisplayFormat(fmt) {
+        if (typeof fmt !== 'string') return null;
+        const m = fmt.match(/\\{:\\.(\\d+)f\\}/);
+        if (m) return { kind: 'fixed', digits: parseInt(m[1], 10) };
+        return null;
+      }
+
+      function formatDisplay(id, value) {
+        if (value === null || value === undefined) return '--';
+        if (controlElements.displayKinds[id] === 'text') return String(value);
+        if (typeof value === 'string') return value;
+        if (Number.isNaN(value)) return '--';
+        const fmt = controlElements.displayFormats[id];
+        if (fmt && fmt.kind === 'fixed') return Number(value).toFixed(fmt.digits);
+        return String(value);
+      }
+
+      function makeScalarControl(el, renderWidget) {
+        const min = (el.min !== undefined) ? Number(el.min) : 0;
+        const max = (el.max !== undefined) ? Number(el.max) : 1;
+        const step = (el.step !== undefined && Number(el.step) > 0) ? Number(el.step) : 0.01;
+        const fmt = parseDisplayFormat(el.format);
+        const formatVal = (v) => (fmt && fmt.kind === 'fixed')
+          ? Number(v).toFixed(fmt.digits)
+          : String(v);
+        const clampRound = (v) => {
+          v = Math.max(min, Math.min(max, Number(v)));
+          const snapped = Math.round((v - min) / step) * step + min;
+          return Number(snapped.toFixed(10));
+        };
+        let value = clampRound((el.value !== undefined) ? Number(el.value) : min);
+
+        const item = document.createElement('div');
+        item.className = 'ctrl-item ctrl-slider flex';
+        if (el.label) {
+          const lbl = document.createElement('label');
+          lbl.textContent = el.label;
+          item.appendChild(lbl);
+        }
+
+        let widget = null;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'ctrl-numinput';
+        input.min = min;
+        input.max = max;
+        input.step = step;
+        input.value = formatVal(value);
+
+        const applyLocal = (v) => {
+          value = clampRound(v);
+          input.value = formatVal(value);
+          if (widget && widget.setValue) widget.setValue(value);
+        };
+        const commit = (v) => {
+          applyLocal(v);
+          sendCtrl({ type: 'control_slider', id: el.id, value: Number(value) });
+        };
+
+        widget = renderWidget({ min, max, step, initial: value, commit, applyLocal });
+        if (widget && widget.node) item.appendChild(widget.node);
+
+        const minusBtn = document.createElement('button');
+        minusBtn.type = 'button';
+        minusBtn.className = 'ctrl-nudgebtn';
+        minusBtn.textContent = '\u2212';
+        minusBtn.title = `\u2212 ${step}`;
+        minusBtn.addEventListener('click', () => commit(value - step));
+        item.appendChild(minusBtn);
+
+        input.addEventListener('change', () => {
+          const v = Number(input.value);
+          if (!Number.isFinite(v)) { input.value = formatVal(value); return; }
+          commit(v);
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        });
+        item.appendChild(input);
+
+        const plusBtn = document.createElement('button');
+        plusBtn.type = 'button';
+        plusBtn.className = 'ctrl-nudgebtn';
+        plusBtn.textContent = '+';
+        plusBtn.title = `+ ${step}`;
+        plusBtn.addEventListener('click', () => commit(value + step));
+        item.appendChild(plusBtn);
+
+        controlElements.sliders[el.id] = { setValue: applyLocal };
+        if (fmt) controlElements.displayFormats[el.id] = fmt;
+        return item;
+      }
+
+      function buildSliderWidget({ min, max, step, initial, commit }) {
+        const range = document.createElement('input');
+        range.type = 'range';
+        range.className = 'ctrl-rangeinput';
+        range.min = min;
+        range.max = max;
+        range.step = step;
+        range.value = initial;
+        range.addEventListener('change', () => commit(Number(range.value)));
+        return {
+          node: range,
+          setValue: (v) => { range.value = v; },
+        };
+      }
+
+      function buildDialWidget({ min, max, initial, commit }) {
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const size = 72;
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+        svg.setAttribute('width', size);
+        svg.setAttribute('height', size);
+        svg.classList.add('ctrl-dial');
+        const cx = size / 2, cy = size / 2, r = size / 2 - 7;
+
+        const track = document.createElementNS(svgNS, 'circle');
+        track.setAttribute('cx', cx);
+        track.setAttribute('cy', cy);
+        track.setAttribute('r', r);
+        track.classList.add('dial-track');
+        svg.appendChild(track);
+
+        const indicator = document.createElementNS(svgNS, 'line');
+        indicator.classList.add('dial-indicator');
+        svg.appendChild(indicator);
+
+        let current = initial;
+        function renderAt(v) {
+          current = v;
+          const frac = (max === min) ? 0 : (v - min) / (max - min);
+          const theta = ((-135 + 270 * frac) * Math.PI / 180);
+          const x2 = cx + (r - 4) * Math.sin(theta);
+          const y2 = cy - (r - 4) * Math.cos(theta);
+          indicator.setAttribute('x1', cx);
+          indicator.setAttribute('y1', cy);
+          indicator.setAttribute('x2', x2);
+          indicator.setAttribute('y2', y2);
+        }
+        renderAt(current);
+
+        svg.addEventListener('pointerdown', (e) => {
+          const startY = e.clientY;
+          const startV = current;
+          const sensitivity = 150; // px for full range
+          const range = (max - min) || 1;
+          const onMove = (em) => {
+            const dy = startY - em.clientY;
+            let v = startV + dy * range / sensitivity;
+            v = Math.max(min, Math.min(max, v));
+            renderAt(v);
+          };
+          const onUp = () => {
+            document.removeEventListener('pointermove', onMove);
+            document.removeEventListener('pointerup', onUp);
+            commit(current);
+          };
+          document.addEventListener('pointermove', onMove);
+          document.addEventListener('pointerup', onUp, { once: true });
+          try { svg.setPointerCapture(e.pointerId); } catch (err) {}
+          e.preventDefault();
+        });
+
+        return {
+          node: svg,
+          setValue: (v) => { renderAt(v); },
+        };
+      }
+
+      function buildControlElement(el) {
+        const item = document.createElement('div');
+        item.className = 'ctrl-item';
+        if (el.type === 'button') {
+          const b = document.createElement('button');
+          b.className = 'ctrl-btn';
+          b.textContent = el.label || el.id;
+          b.addEventListener('click', () => sendCtrl({ type: 'control_button', id: el.id }));
+          item.appendChild(b);
+        } else if (el.type === 'slider') {
+          return makeScalarControl(el, buildSliderWidget);
+        } else if (el.type === 'dial') {
+          return makeScalarControl(el, buildDialWidget);
+        } else if (el.type === 'display') {
+          item.classList.add('ctrl-display');
+          if (el.label) {
+            const lbl = document.createElement('label');
+            lbl.textContent = el.label;
+            item.appendChild(lbl);
+          }
+          const val = document.createElement('span');
+          val.className = 'ctrl-val';
+          val.textContent = '--';
+          item.appendChild(val);
+          controlElements.displays[el.id] = val;
+          controlElements.displayKinds[el.id] = 'numeric';
+          const fmt = parseDisplayFormat(el.format);
+          if (fmt) controlElements.displayFormats[el.id] = fmt;
+        } else if (el.type === 'text') {
+          item.classList.add('ctrl-text', 'flex');
+          if (el.label) {
+            const lbl = document.createElement('label');
+            lbl.textContent = el.label;
+            item.appendChild(lbl);
+          }
+          const val = document.createElement('span');
+          val.className = 'ctrl-val ctrl-textval';
+          val.textContent = el.value || '--';
+          item.appendChild(val);
+          controlElements.displays[el.id] = val;
+          controlElements.displayKinds[el.id] = 'text';
+        }
+        return item;
+      }
+
+      function buildControlRow(row) {
+        const div = document.createElement('div');
+        div.className = 'ctrl-row';
+        row.forEach(el => div.appendChild(buildControlElement(el)));
+        return div;
+      }
+
+      function applySliderValues(values) {
+        if (!values) return;
+        for (const [id, val] of Object.entries(values)) {
+          const s = controlElements.sliders[id];
+          if (s && typeof s.setValue === 'function') s.setValue(val);
+        }
+      }
+
+      function applyDisplayValues(values) {
+        if (!values) return;
+        for (const [id, val] of Object.entries(values)) {
+          const node = controlElements.displays[id];
+          if (node) node.textContent = formatDisplay(id, val);
+        }
+      }
 
       function destroyPlots() {
         plots.forEach(p => { try { p.uplot.destroy(); } catch (e) {} });
         plots = [];
         plotsDiv.innerHTML = '';
         totalTraces = 0;
+        controlElements.displays = {};
+        controlElements.displayFormats = {};
+        controlElements.displayKinds = {};
+        controlElements.sliders = {};
+      }
+
+      function buildOnePlot(pcfg, rowLayout, traceOffset) {
+        const xrange = pcfg.xrange || 200;
+        const xs = new Float64Array(xrange);
+        for (let i = 0; i < xrange; i++) xs[i] = i;
+
+        const traceCount = pcfg.names.length;
+        const colors = pcfg.colors || DEFAULT_COLORS;
+        const widths = pcfg.line_width || [];
+        const styles = pcfg.line_style || [];
+
+        const series = [{}];
+        for (let t = 0; t < traceCount; t++) {
+          const dash = (styles[t] === '-') ? [10, 5] : null;
+          series.push({
+            label: pcfg.names[t],
+            stroke: resolveColor(colors[t]),
+            width: widths[t] || 1,
+            dash: dash || undefined,
+            points: { show: false },
+            spanGaps: true,
+          });
+        }
+
+        const opts = {
+          width: Math.max(640, plotsDiv.clientWidth - 40),
+          height: rowLayout ? 260 : 320,
+          title: pcfg.title || '',
+          scales: {
+            x: { time: false, range: [0, xrange - 1] },
+            y: pcfg.yrange ? { range: [pcfg.yrange[0], pcfg.yrange[1]] } : {},
+          },
+          axes: [
+            { label: pcfg.xlabel || '' },
+            { label: pcfg.ylabel || '' },
+          ],
+          series: series,
+          legend: { show: true },
+          cursor: { drag: { x: false, y: false } },
+        };
+
+        const wrap = document.createElement('div');
+        wrap.className = 'plot-wrap';
+        plotsDiv.appendChild(wrap);
+
+        const buffers = [];
+        for (let t = 0; t < traceCount; t++) {
+          const buf = new Float32Array(xrange);
+          buf.fill(NaN);
+          buffers.push(buf);
+        }
+
+        const initialData = [xs];
+        for (let t = 0; t < traceCount; t++) initialData.push(buffers[t]);
+
+        const u = new uPlot(opts, initialData, wrap);
+        plots.push({
+          uplot: u,
+          xs: xs,
+          traceCount: traceCount,
+          startIdx: traceOffset,
+          xrange: xrange,
+          buffers: buffers,
+          height: opts.height,
+        });
+        return traceCount;
       }
 
       function buildPlots(cfg) {
@@ -723,74 +1217,27 @@ INDEX_HTML = """<!doctype html>
         plotsDiv.classList.toggle('row', cfg.row_layout);
         plotsDiv.classList.toggle('col', !cfg.row_layout);
 
+        const controls = cfg.controls || [];
+        const layout = (cfg.layout && cfg.layout.length)
+          ? cfg.layout
+          : cfg.plots.map((_, idx) => ({ kind: 'plot', index: idx }))
+              .concat(controls.map((_, idx) => ({ kind: 'controls', index: idx })));
+
         let traceOffset = 0;
-        cfg.plots.forEach((pcfg, idx) => {
-          const xrange = pcfg.xrange || 200;
-          const xs = new Float64Array(xrange);
-          for (let i = 0; i < xrange; i++) xs[i] = i;
-
-          const traceCount = pcfg.names.length;
-          const colors = pcfg.colors || DEFAULT_COLORS;
-          const widths = pcfg.line_width || [];
-          const styles = pcfg.line_style || [];
-
-          const series = [{}];
-          for (let t = 0; t < traceCount; t++) {
-            const dash = (styles[t] === '-') ? [10, 5] : null;
-            series.push({
-              label: pcfg.names[t],
-              stroke: resolveColor(colors[t]),
-              width: widths[t] || 1,
-              dash: dash || undefined,
-              points: { show: false },
-              spanGaps: true,
-            });
+        layout.forEach(entry => {
+          if (entry.kind === 'plot') {
+            const pcfg = cfg.plots[entry.index];
+            if (!pcfg) return;
+            traceOffset += buildOnePlot(pcfg, cfg.row_layout, traceOffset);
+          } else if (entry.kind === 'controls') {
+            const row = controls[entry.index];
+            if (!row) return;
+            plotsDiv.appendChild(buildControlRow(row));
           }
-
-          const opts = {
-            width: Math.max(640, plotsDiv.clientWidth - 40),
-            height: cfg.row_layout ? 260 : 320,
-            title: pcfg.title || '',
-            scales: {
-              x: { time: false, range: [0, xrange - 1] },
-              y: pcfg.yrange ? { range: [pcfg.yrange[0], pcfg.yrange[1]] } : {},
-            },
-            axes: [
-              { label: pcfg.xlabel || '' },
-              { label: pcfg.ylabel || '' },
-            ],
-            series: series,
-            legend: { show: true },
-            cursor: { drag: { x: false, y: false } },
-          };
-
-          const wrap = document.createElement('div');
-          wrap.className = 'plot-wrap';
-          plotsDiv.appendChild(wrap);
-
-          const buffers = [];
-          for (let t = 0; t < traceCount; t++) {
-            const buf = new Float32Array(xrange);
-            buf.fill(NaN);
-            buffers.push(buf);
-          }
-
-          const initialData = [xs];
-          for (let t = 0; t < traceCount; t++) initialData.push(buffers[t]);
-
-          const u = new uPlot(opts, initialData, wrap);
-          plots.push({
-            uplot: u,
-            xs: xs,
-            traceCount: traceCount,
-            startIdx: traceOffset,
-            xrange: xrange,
-            buffers: buffers,
-            height: opts.height,
-          });
-          traceOffset += traceCount;
         });
         totalTraces = traceOffset;
+        applySliderValues(cfg.slider_values);
+        applyDisplayValues(cfg.display_values);
         scheduleRender();
       }
 
@@ -905,6 +1352,8 @@ INDEX_HTML = """<!doctype html>
               if (msg.mode === 'connect' && msg.target) {
                 ipInput.value = msg.target;
               }
+            } else if (msg.type === 'display_update') {
+              applyDisplayValues(msg.values);
             }
           } else {
             applyBinary(ev.data);
@@ -954,7 +1403,11 @@ INDEX_HTML = """<!doctype html>
 
 
 async def handle_index(request):
-    return web.Response(text=INDEX_HTML, content_type="text/html")
+    return web.Response(
+        text=INDEX_HTML,
+        content_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
 
 
 async def handle_ws(request):
@@ -973,6 +1426,15 @@ async def handle_ws(request):
         )
         if state["config_message"] is not None:
             await ws.send_str(json.dumps(state["config_message"]))
+            if state["display_values"]:
+                await ws.send_str(
+                    json.dumps(
+                        {
+                            "type": "display_update",
+                            "values": dict(state["display_values"]),
+                        }
+                    )
+                )
             snap = make_snapshot_message()
             if snap is not None:
                 await ws.send_bytes(snap)
@@ -991,6 +1453,21 @@ async def handle_ws(request):
                         await reconfigure_zmq(request.app, connect_ip=ip)
                 elif ptype == "bind":
                     await reconfigure_zmq(request.app, connect_ip=None)
+                elif ptype == "control_button":
+                    btn_id = payload.get("id")
+                    if btn_id:
+                        await send_control_event({"type": "button", "id": btn_id})
+                elif ptype == "control_slider":
+                    sid = payload.get("id")
+                    try:
+                        value = float(payload.get("value", 0.0))
+                    except (TypeError, ValueError):
+                        value = 0.0
+                    if sid:
+                        state["slider_values"][sid] = value
+                        await send_control_event(
+                            {"type": "slider", "id": sid, "value": value}
+                        )
             elif msg.type == WSMsgType.ERROR:
                 break
     finally:
@@ -1001,10 +1478,11 @@ async def handle_ws(request):
 async def on_startup(app):
     app["zmq_task"] = asyncio.create_task(zmq_receiver())
     app["ws_task"] = asyncio.create_task(ws_pusher())
+    app["display_task"] = asyncio.create_task(display_pusher())
 
 
 async def on_cleanup(app):
-    for key in ("zmq_task", "ws_task"):
+    for key in ("zmq_task", "ws_task", "display_task"):
         task = app.get(key)
         if task:
             task.cancel()
@@ -1015,6 +1493,8 @@ async def on_cleanup(app):
     for ws in list(ws_clients):
         await ws.close()
     zmq_socket.close(0)
+    if control_push_socket is not None:
+        control_push_socket.close(0)
     zmq_ctx.term()
 
 
