@@ -271,7 +271,18 @@ def _configure_demo_sender(rtp_client, target: str, source_label: str):
     """Configure rtplot.client for ``target`` and push the demo layout.
 
     Returns None on success, an error string on failure.
+
+    Sends the config TWICE with a small delay in between as a slow-joiner
+    guard. ZMQ PUB/SUB drops messages that are sent before the subscriber
+    has finished handshaking, and ``configure_ip`` only sleeps 1 second —
+    which can still be too short on Windows loopback once in a while.
+    The server's ``parse_config`` path is idempotent, so resending the
+    same config is harmless in the common case where the first message
+    already landed.
     """
+    import time
+
+    _log(f"demo sender: configure_ip({target!r})")
     try:
         rtp_client.configure_ip(target)
     except Exception as exc:  # noqa: BLE001
@@ -290,11 +301,22 @@ def _configure_demo_sender(rtp_client, target: str, source_label: str):
             {"type": "display", "id": "count", "label": "sent", "format": "{:.0f}"},
         ],
     }
+    layout = [plot_cfg, controls_row]
+    _log("demo sender: sending initialize_plots (first pass)")
     try:
-        rtp_client.initialize_plots([plot_cfg, controls_row])
+        rtp_client.initialize_plots(layout)
     except Exception as exc:  # noqa: BLE001
-        _log("initialize_plots failed: " + traceback.format_exc())
+        _log("initialize_plots (1st) failed: " + traceback.format_exc())
         return f"initialize_plots: {exc}"
+    # Slow-joiner guard — sleep + resend. See docstring above.
+    time.sleep(0.4)
+    _log("demo sender: re-sending initialize_plots (slow-joiner guard)")
+    try:
+        rtp_client.initialize_plots(layout)
+    except Exception as exc:  # noqa: BLE001
+        _log("initialize_plots (2nd) failed: " + traceback.format_exc())
+        return f"initialize_plots (resend): {exc}"
+    _log("demo sender: initialize_plots ok")
     return None
 
 
@@ -546,7 +568,8 @@ def _run_with_gui(args, rest):
             return
         target_raw = target_var.get().strip()
         target = target_raw or "127.0.0.1"
-        demo_status_var.set(f"connecting to {target}…")
+        demo_status_var.set(f"importing rtplot.client…")
+        _log(f"demo sender: start requested, target={target}")
         try:
             if demo_state["client"] is None:
                 from rtplot import client as rtp_client  # noqa: E402
@@ -557,11 +580,17 @@ def _run_with_gui(args, rest):
             demo_status_var.set(f"error: {exc}")
             return
 
+        demo_status_var.set(f"connecting to {target}…")
+        # Force a UI refresh so the "connecting" text actually paints
+        # before we hand control off to the blocking configure/sleep call.
+        root.update_idletasks()
+
         source_label = (
             "demo sender -> localhost" if not target_raw else f"demo sender -> {target}"
         )
         err = _configure_demo_sender(rtp_client, target, source_label)
         if err is not None:
+            _log(f"demo sender: config failed: {err}")
             demo_status_var.set(f"error: {err}")
             return
 
@@ -571,6 +600,7 @@ def _run_with_gui(args, rest):
             _remember_host(settings, target_raw)
             target_entry.configure(values=settings.get("recent_hosts", []))
 
+        _log(f"demo sender: starting sender thread")
         demo_state["stats"] = {"count": 0, "elapsed": 0.0, "error": None}
         demo_state["stop"] = threading.Event()
         demo_state["thread"] = threading.Thread(
