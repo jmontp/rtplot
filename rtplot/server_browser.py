@@ -390,21 +390,49 @@ def build_config_message(config_dict):
 # ZMQ setup #
 ###############
 
+ZMQ_DEFAULT_PORT = 5555
 zmq_ctx = zmq.asyncio.Context()
-zmq_socket = zmq_ctx.socket(zmq.SUB)
+zmq_socket = None
 
-if args.pi_ip is not None:
-    if args.pi_ip.count(":") == 1:
-        connect_string = f"tcp://{args.pi_ip}"
+# Live description of the current ZMQ wiring, used by the browser status pill
+# and reported back to clients on connect/reconfigure.
+zmq_status = {"mode": "bind", "target": f"*:{ZMQ_DEFAULT_PORT}"}
+
+
+def _normalize_connect_target(ip):
+    """Return ``(tcp://...endpoint, host:port label)`` for a user-supplied IP."""
+    ip = ip.strip()
+    if ip.startswith("tcp://"):
+        endpoint = ip
+        label = ip[len("tcp://") :]
+    elif ip.count(":") == 1:
+        endpoint = f"tcp://{ip}"
+        label = ip
     else:
-        connect_string = f"tcp://{args.pi_ip}:5555"
-    zmq_socket.connect(connect_string)
-    print(f"Connected to {connect_string}")
-else:
-    zmq_socket.bind("tcp://*:5555")
-    print("Bounded every ip address on port :5555")
+        endpoint = f"tcp://{ip}:{ZMQ_DEFAULT_PORT}"
+        label = f"{ip}:{ZMQ_DEFAULT_PORT}"
+    return endpoint, label
 
-zmq_socket.setsockopt_string(zmq.SUBSCRIBE, "")
+
+def _open_zmq_socket(connect_ip=None):
+    """Create a fresh SUB socket bound or connected per ``connect_ip``."""
+    sock = zmq_ctx.socket(zmq.SUB)
+    if connect_ip:
+        endpoint, label = _normalize_connect_target(connect_ip)
+        sock.connect(endpoint)
+        zmq_status["mode"] = "connect"
+        zmq_status["target"] = label
+        print(f"ZMQ: connected to {endpoint}")
+    else:
+        sock.bind(f"tcp://*:{ZMQ_DEFAULT_PORT}")
+        zmq_status["mode"] = "bind"
+        zmq_status["target"] = f"*:{ZMQ_DEFAULT_PORT}"
+        print(f"ZMQ: bound on tcp://*:{ZMQ_DEFAULT_PORT}")
+    sock.setsockopt_string(zmq.SUBSCRIBE, "")
+    return sock
+
+
+zmq_socket = _open_zmq_socket(connect_ip=args.pi_ip)
 
 RECEIVED_PLOT_UPDATE = 0
 RECEIVED_DATA = 1
@@ -523,6 +551,50 @@ async def zmq_receiver():
             save_current_plot(log_name)
 
 
+async def reconfigure_zmq(app, connect_ip=None):
+    """Tear down the running receiver, swap the socket, restart the receiver.
+
+    ``connect_ip`` is None to bind on the default port, or a "host[:port]"
+    string to connect outbound to a publisher. Resets the plot buffer state
+    so the browser doesn't show data from the previous source.
+    """
+    global zmq_socket
+
+    old_task = app.get("zmq_task")
+    if old_task is not None:
+        old_task.cancel()
+        try:
+            await old_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+    try:
+        zmq_socket.close(0)
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        zmq_socket = _open_zmq_socket(connect_ip=connect_ip)
+    except Exception as exc:  # noqa: BLE001
+        # Fall back to bind so the server keeps running and tell the browser.
+        print(f"ZMQ reconfigure failed ({exc}); falling back to bind")
+        zmq_socket = _open_zmq_socket(connect_ip=None)
+
+    state["initialized"] = False
+    state["config_message"] = None
+    state["num_traces"] = 0
+    state["last_pushed_li"] = state["li"]
+
+    await broadcast_zmq_status()
+    app["zmq_task"] = asyncio.create_task(zmq_receiver())
+
+
+async def broadcast_zmq_status():
+    await broadcast_text(
+        {"type": "zmq_status", "mode": zmq_status["mode"], "target": zmq_status["target"]}
+    )
+
+
 async def ws_pusher():
     """Push new samples to all browsers as binary delta frames.
 
@@ -576,8 +648,10 @@ INDEX_HTML = """<!doctype html>
   #status { font-size: 14px; padding: 4px 10px; border-radius: 4px; background: #eee; }
   #status.green { background: #d4f5d4; color: #186a18; }
   #status.red { background: #f9d4d4; color: #8a1a1a; }
-  #save-btn { padding: 6px 14px; font-size: 14px; border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; }
-  #save-btn:hover { background: #f0f0f0; }
+  .btn { padding: 6px 12px; font-size: 14px; border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; }
+  .btn:hover { background: #f0f0f0; }
+  #ip-input { padding: 6px 8px; font-size: 13px; border: 1px solid #888; border-radius: 4px; width: 170px; font-family: monospace; }
+  #zmq-mode { font-size: 12px; color: #555; padding: 2px 8px; background: #eef; border-radius: 4px; }
   #ws-status { font-size: 12px; color: #666; margin-left: auto; }
   #plots { display: flex; padding: 12px; gap: 12px; }
   #plots.row { flex-direction: column; }
@@ -590,7 +664,11 @@ INDEX_HTML = """<!doctype html>
   <div id=\"header\">
     <h1>rtplot</h1>
     <div id=\"status\" class=\"green\">Rate: -- Hz</div>
-    <button id=\"save-btn\">Save Plot</button>
+    <button id=\"save-btn\" class=\"btn\">Save Plot</button>
+    <div id=\"zmq-mode\">ZMQ: --</div>
+    <input id=\"ip-input\" type=\"text\" placeholder=\"host[:port]\" />
+    <button id=\"connect-btn\" class=\"btn\">Connect</button>
+    <button id=\"bind-btn\" class=\"btn\">Bind</button>
     <div id=\"ws-status\">connecting...</div>
   </div>
   <div id=\"plots\" class=\"row\"></div>
@@ -618,6 +696,10 @@ INDEX_HTML = """<!doctype html>
       const statusDiv = document.getElementById('status');
       const wsStatus = document.getElementById('ws-status');
       const saveBtn = document.getElementById('save-btn');
+      const ipInput = document.getElementById('ip-input');
+      const connectBtn = document.getElementById('connect-btn');
+      const bindBtn = document.getElementById('bind-btn');
+      const zmqMode = document.getElementById('zmq-mode');
 
       const HEADER_SIZE = 16;
       const MSG_SNAPSHOT = 0;
@@ -688,7 +770,9 @@ INDEX_HTML = """<!doctype html>
 
           const buffers = [];
           for (let t = 0; t < traceCount; t++) {
-            buffers.push(new Float32Array(xrange));
+            const buf = new Float32Array(xrange);
+            buf.fill(NaN);
+            buffers.push(buf);
           }
 
           const initialData = [xs];
@@ -718,7 +802,10 @@ INDEX_HTML = """<!doctype html>
           plots.forEach(p => {
             const data = [p.xs];
             for (let t = 0; t < p.traceCount; t++) data.push(p.buffers[t]);
-            p.uplot.setData(data, false);
+            // Default resetScales=true so y-axis auto-fits when no yrange
+            // was supplied. With explicit yrange, uPlot pins the scale and
+            // this is essentially a no-op.
+            p.uplot.setData(data);
           });
           if (lastStatus.dirty) {
             const txt = `Rate: ${lastStatus.fps.toFixed(0)} Hz` +
@@ -787,6 +874,16 @@ INDEX_HTML = """<!doctype html>
         scheduleRender();
       }
 
+      function setZmqMode(mode, target) {
+        if (mode === 'connect') {
+          zmqMode.textContent = `ZMQ → ${target}`;
+        } else if (mode === 'bind') {
+          zmqMode.textContent = `ZMQ bind ${target || '*:5555'}`;
+        } else {
+          zmqMode.textContent = 'ZMQ: --';
+        }
+      }
+
       function connect() {
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         socket = new WebSocket(proto + '//' + location.host + '/ws');
@@ -801,7 +898,14 @@ INDEX_HTML = """<!doctype html>
           if (typeof ev.data === 'string') {
             let msg;
             try { msg = JSON.parse(ev.data); } catch (e) { return; }
-            if (msg.type === 'config') buildPlots(msg);
+            if (msg.type === 'config') {
+              buildPlots(msg);
+            } else if (msg.type === 'zmq_status') {
+              setZmqMode(msg.mode, msg.target);
+              if (msg.mode === 'connect' && msg.target) {
+                ipInput.value = msg.target;
+              }
+            }
           } else {
             applyBinary(ev.data);
           }
@@ -811,6 +915,24 @@ INDEX_HTML = """<!doctype html>
       saveBtn.addEventListener('click', () => {
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: 'save' }));
+        }
+      });
+
+      connectBtn.addEventListener('click', () => {
+        const ip = ipInput.value.trim();
+        if (!ip) { ipInput.focus(); return; }
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'configure_ip', ip: ip }));
+        }
+      });
+
+      ipInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') connectBtn.click();
+      });
+
+      bindBtn.addEventListener('click', () => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'bind' }));
         }
       });
 
@@ -840,6 +962,15 @@ async def handle_ws(request):
     await ws.prepare(request)
     ws_clients.add(ws)
     try:
+        await ws.send_str(
+            json.dumps(
+                {
+                    "type": "zmq_status",
+                    "mode": zmq_status["mode"],
+                    "target": zmq_status["target"],
+                }
+            )
+        )
         if state["config_message"] is not None:
             await ws.send_str(json.dumps(state["config_message"]))
             snap = make_snapshot_message()
@@ -851,8 +982,15 @@ async def handle_ws(request):
                     payload = json.loads(msg.data)
                 except json.JSONDecodeError:
                     continue
-                if payload.get("type") == "save":
+                ptype = payload.get("type")
+                if ptype == "save":
                     save_current_plot(payload.get("name"))
+                elif ptype == "configure_ip":
+                    ip = payload.get("ip")
+                    if ip:
+                        await reconfigure_zmq(request.app, connect_ip=ip)
+                elif ptype == "bind":
+                    await reconfigure_zmq(request.app, connect_ip=None)
             elif msg.type == WSMsgType.ERROR:
                 break
     finally:
