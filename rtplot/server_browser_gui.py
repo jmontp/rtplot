@@ -476,6 +476,11 @@ def _run_with_gui(args, rest):
         return
 
     # ---------------------------------------------------------------- UI
+    # Layout philosophy: the user downloaded an exe and double-clicked it.
+    # They want to know (1) is it running? (2) how do I see my plots?
+    # Everything else — demo sender, save path, server logs — is hidden
+    # behind a single "Show advanced options" collapse so the main screen
+    # stays light and unintimidating.
     root = tk.Tk()
     root.title("rtplot server")
     root.resizable(False, False)
@@ -486,121 +491,198 @@ def _run_with_gui(args, rest):
     except tk.TclError:
         pass
 
-    # A borderless ttk.Entry looks like a label but its text is
-    # OS-selectable — click-drag to select, Ctrl+C to copy.
-    bg = "#f0f0f0"
+    BG = "#f7f7f7"
     try:
-        bg = style.lookup("TFrame", "background") or bg
+        root.configure(bg=BG)
     except tk.TclError:
         pass
-    style.configure(
-        "Selectable.TEntry",
-        fieldbackground=bg,
-        background=bg,
-        borderwidth=0,
-        relief="flat",
-        padding=0,
-        foreground="#555",
-    )
-    style.configure(
-        "Strong.TEntry",
-        fieldbackground=bg,
-        background=bg,
-        borderwidth=0,
-        relief="flat",
-        padding=0,
-        foreground="#186a18",
-    )
 
-    def _selectable_entry(parent, var, style_name="Selectable.TEntry", **kwargs):
-        e = ttk.Entry(
-            parent, textvariable=var, style=style_name, takefocus=0, **kwargs
+    # Custom ttk styles for the hero + helpers
+    try:
+        style.configure("TFrame", background=BG)
+        style.configure("TLabel", background=BG)
+        style.configure("TLabelframe", background=BG)
+        style.configure("TLabelframe.Label", background=BG)
+        style.configure(
+            "Hero.TLabel",
+            font=("Segoe UI", 15, "bold"),
+            foreground="#186a18",
+            background=BG,
         )
-        # Block editing but keep selection + Ctrl+C working. Returning
-        # "break" stops the default text-edit handlers, but key events
-        # with only modifiers (e.g. Ctrl+C) still propagate to the
-        # clipboard code before we see them.
-        def _readonly(ev):
-            allowed = {"c", "C", "a", "A", "Left", "Right", "Home", "End"}
-            if ev.state & 0x4 and (ev.keysym in allowed):
-                return
-            return "break"
-        e.bind("<Key>", _readonly)
-        return e
+        style.configure(
+            "Subhead.TLabel",
+            font=("Segoe UI", 10),
+            foreground="#555",
+            background=BG,
+        )
+        style.configure(
+            "Muted.TLabel",
+            font=("Segoe UI", 9),
+            foreground="#777",
+            background=BG,
+        )
+        style.configure(
+            "Mono.TLabel",
+            font=("Consolas", 9),
+            foreground="#555",
+            background=BG,
+        )
+        style.configure(
+            "Section.TLabel",
+            font=("Segoe UI", 10, "bold"),
+            foreground="#333",
+            background=BG,
+        )
+        style.configure(
+            "Help.TLabel",
+            font=("Segoe UI", 9),
+            foreground="#888",
+            background=BG,
+        )
+        style.configure(
+            "Primary.TButton",
+            font=("Segoe UI", 10, "bold"),
+            padding=(14, 7),
+        )
+        style.configure(
+            "Link.TButton",
+            foreground="#2a5db0",
+            background=BG,
+            borderwidth=0,
+            padding=(0, 2),
+            font=("Segoe UI", 9),
+        )
+        style.map(
+            "Link.TButton",
+            foreground=[("active", "#1a3d80")],
+            background=[("active", BG)],
+        )
+    except tk.TclError:
+        pass
 
-    frame = ttk.Frame(root, padding=16)
-    frame.pack(fill="both", expand=True)
+    main = ttk.Frame(root, padding=(24, 20, 24, 0))
+    main.pack(fill="both", expand=True)
 
+    # ---- Hero: running indicator + one-sentence instruction ----
     ttk.Label(
-        frame,
-        text="rtplot browser server",
-        font=("Segoe UI", 13, "bold"),
+        main,
+        text="\u2713  Your rtplot server is running",
+        style="Hero.TLabel",
     ).pack(anchor="w")
+    ttk.Label(
+        main,
+        text="Open this address in any browser to see your plots:",
+        style="Subhead.TLabel",
+    ).pack(anchor="w", pady=(4, 10))
 
-    running_var = tk.StringVar(value="● running")
-    _selectable_entry(frame, running_var, style_name="Strong.TEntry", width=44).pack(
-        anchor="w", pady=(0, 10)
-    )
-
+    # ---- Big URL display (clickable, copy-able) ----
     url = f"http://localhost:{args.port}"
     url_var = tk.StringVar(value=url)
-    url_entry = ttk.Entry(frame, textvariable=url_var, width=44)
-    url_entry.pack(fill="x")
-    url_entry.bind("<Key>", lambda e: "break" if not (e.state & 0x4) else None)
+    url_entry = tk.Entry(
+        main,
+        textvariable=url_var,
+        font=("Consolas", 13),
+        bg="#ffffff",
+        fg="#222",
+        relief="solid",
+        bd=1,
+        readonlybackground="#ffffff",
+        state="readonly",
+        cursor="hand2",
+        justify="center",
+    )
+    url_entry.pack(fill="x", ipady=8)
 
-    def on_open():
+    def _open_browser(_event=None):
         webbrowser.open(url)
 
-    def on_copy():
+    url_entry.bind("<Button-1>", _open_browser)
+
+    # ---- Primary / secondary action buttons ----
+    copy_feedback_var = tk.StringVar(value="")
+
+    def _on_copy():
         root.clipboard_clear()
         root.clipboard_append(url)
+        copy_feedback_var.set("copied \u2713")
+        root.after(1500, lambda: copy_feedback_var.set(""))
 
-    btn_row = ttk.Frame(frame)
-    btn_row.pack(fill="x", pady=(8, 12))
-    ttk.Button(btn_row, text="Open in browser", command=on_open).pack(
-        side="left", padx=(0, 6)
+    btn_row = ttk.Frame(main)
+    btn_row.pack(fill="x", pady=(12, 4))
+    ttk.Button(
+        btn_row,
+        text="\u25B6  Open in browser",
+        style="Primary.TButton",
+        command=_open_browser,
+    ).pack(side="left")
+    ttk.Button(btn_row, text="Copy link", command=_on_copy).pack(
+        side="left", padx=(8, 0)
     )
-    ttk.Button(btn_row, text="Copy URL", command=on_copy).pack(side="left")
+    ttk.Label(btn_row, textvariable=copy_feedback_var, style="Muted.TLabel").pack(
+        side="left", padx=(10, 0)
+    )
 
+    # ---- LAN IPs as muted helper text ----
     lan_ips = _lan_ips()
     if lan_ips:
-        lan_var = tk.StringVar(
-            value="LAN: " + ", ".join(f"http://{ip}:{args.port}" for ip in lan_ips)
-        )
-        _selectable_entry(frame, lan_var, width=60).pack(anchor="w", fill="x")
+        ttk.Label(
+            main,
+            text="Also reachable from other devices on your network at:",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(14, 2))
+        for ip in lan_ips:
+            ttk.Label(
+                main,
+                text=f"  http://{ip}:{args.port}",
+                style="Mono.TLabel",
+            ).pack(anchor="w")
 
-    zmq_var = tk.StringVar(value="ZMQ: initializing…")
-    _selectable_entry(frame, zmq_var, width=60).pack(anchor="w", fill="x", pady=(6, 0))
-    stats_var = tk.StringVar(value="0 Hz  |  0 browser client(s)")
-    _selectable_entry(frame, stats_var, width=60).pack(anchor="w", fill="x")
+    # ---- Advanced collapse toggle ----
+    advanced_expanded = {"value": False}
+    advanced_toggle_var = tk.StringVar(value="\u25B8  Show advanced options")
+    advanced_frame = ttk.Frame(main)
 
-    def poll_status():
-        try:
-            zm = getattr(sb, "zmq_status", {}) or {}
-            mode = zm.get("mode", "?")
-            target = zm.get("target", "?")
-            zmq_var.set(f"ZMQ: {mode} {target}")
-            state = getattr(sb, "state", {}) or {}
-            fps = state.get("fps", 0) or 0
-            num_clients = len(getattr(sb, "ws_clients", set()) or set())
-            stats_var.set(
-                f"{fps:.0f} Hz  |  {num_clients} browser client(s) connected"
-            )
-        except Exception as exc:  # noqa: BLE001
-            zmq_var.set(f"status error: {exc}")
-        root.after(500, poll_status)
+    def _relayout_window():
+        # Size the window to fit whichever sections are currently visible.
+        if advanced_expanded["value"]:
+            if log_state["expanded"]:
+                root.geometry("600x760")
+            else:
+                root.geometry("520x620")
+        else:
+            root.geometry("480x320") if lan_ips else root.geometry("480x260")
 
-    poll_status()
+    def _toggle_advanced():
+        advanced_expanded["value"] = not advanced_expanded["value"]
+        if advanced_expanded["value"]:
+            advanced_toggle_var.set("\u25BE  Hide advanced options")
+            advanced_frame.pack(fill="x", expand=False, pady=(4, 0))
+        else:
+            advanced_toggle_var.set("\u25B8  Show advanced options")
+            advanced_frame.pack_forget()
+        _relayout_window()
 
-    # ----- "Demo sender" self-test section ----------------------------
-    # Lets the user start a local rtplot.client inside the same process
-    # that streams a 1.5 Hz sine wave at the server. Default target is
-    # localhost (exercises the loopback ZMQ path end to end); a
-    # collapsable field lets you retarget it at another machine to
-    # smoke-test cross-PC connectivity without running a second
-    # instance of the exe with --test-client.
-    demo_frame = ttk.LabelFrame(frame, text="Demo sender", padding=10)
-    demo_frame.pack(fill="x", pady=(14, 0))
+    ttk.Button(
+        main,
+        textvariable=advanced_toggle_var,
+        command=_toggle_advanced,
+        style="Link.TButton",
+    ).pack(anchor="w", pady=(18, 0))
+
+    # ==================================================================
+    # Advanced section (hidden by default)
+    # ==================================================================
+
+    # --- Test sender sub-section ---
+    ttk.Separator(advanced_frame, orient="horizontal").pack(fill="x", pady=(12, 10))
+    ttk.Label(advanced_frame, text="Test with sample data", style="Section.TLabel").pack(
+        anchor="w"
+    )
+    ttk.Label(
+        advanced_frame,
+        text="Stream a demo sine wave at the server so you can confirm end-to-end.",
+        style="Help.TLabel",
+    ).pack(anchor="w", pady=(2, 6))
 
     demo_state = {
         "running": False,
@@ -609,12 +691,11 @@ def _run_with_gui(args, rest):
         "stats": {"count": 0, "elapsed": 0.0, "error": None},
         "client": None,
     }
-
-    demo_btn_var = tk.StringVar(value="▶ Start demo sender")
+    demo_btn_var = tk.StringVar(value="\u25B6 Start demo sender")
     demo_status_var = tk.StringVar(value="")
 
     target_expanded = {"value": False}
-    target_toggle_var = tk.StringVar(value="▸ Send to another PC…")
+    target_toggle_var = tk.StringVar(value="\u25B8 Send to another PC\u2026")
     target_var = tk.StringVar(value="")
 
     def _start_demo():
@@ -622,22 +703,19 @@ def _run_with_gui(args, rest):
             return
         target_raw = target_var.get().strip()
 
-        # Normalize the user's input: strip http:// prefix, drop HTTP
-        # ports (8050/80/443/...) and let the ZMQ default of 5555 win.
-        # If the target is blank, default to localhost.
         if target_raw:
             target, warn = _normalize_demo_target(target_raw)
             if not target:
                 target = "127.0.0.1"
             if warn:
-                _log(f"demo sender: target normalized: {target_raw!r} -> {target!r} ({warn})")
-                # Echo the cleaned value back into the entry so next click
-                # is already clean and the user sees what we did.
+                _log(
+                    f"demo sender: target normalized: {target_raw!r} -> {target!r} ({warn})"
+                )
                 target_var.set(target)
         else:
             target = "127.0.0.1"
 
-        demo_status_var.set("importing rtplot.client…")
+        demo_status_var.set("importing rtplot.client\u2026")
         _log(f"demo sender: start requested, target={target}")
         try:
             if demo_state["client"] is None:
@@ -649,13 +727,13 @@ def _run_with_gui(args, rest):
             demo_status_var.set(f"error: {exc}")
             return
 
-        demo_status_var.set(f"connecting to {target}…")
-        # Force a UI refresh so the "connecting" text actually paints
-        # before we hand control off to the blocking configure/sleep call.
+        demo_status_var.set(f"connecting to {target}\u2026")
         root.update_idletasks()
 
         source_label = (
-            "demo sender -> localhost" if not target_raw else f"demo sender -> {target}"
+            "demo sender -> localhost"
+            if not target_raw
+            else f"demo sender -> {target}"
         )
         err = _configure_demo_sender(rtp_client, target, source_label)
         if err is not None:
@@ -663,15 +741,11 @@ def _run_with_gui(args, rest):
             demo_status_var.set(f"error: {err}")
             return
 
-        # Persist the cleaned host (not the raw user input) so the
-        # dropdown contains the canonical form for next time. Skip if
-        # the user left it blank — we don't want "127.0.0.1" in the
-        # dropdown as an "entry".
         if target_raw:
             _remember_host(settings, target)
             target_entry.configure(values=settings.get("recent_hosts", []))
 
-        _log(f"demo sender: starting sender thread")
+        _log("demo sender: starting sender thread")
         demo_state["stats"] = {"count": 0, "elapsed": 0.0, "error": None}
         demo_state["stop"] = threading.Event()
         demo_state["thread"] = threading.Thread(
@@ -681,7 +755,7 @@ def _run_with_gui(args, rest):
         )
         demo_state["thread"].start()
         demo_state["running"] = True
-        demo_btn_var.set("■ Stop demo sender")
+        demo_btn_var.set("\u25A0 Stop demo sender")
         target_entry.configure(state="disabled")
 
     def _stop_demo():
@@ -695,7 +769,7 @@ def _run_with_gui(args, rest):
             except Exception:  # noqa: BLE001
                 pass
         demo_state["running"] = False
-        demo_btn_var.set("▶ Start demo sender")
+        demo_btn_var.set("\u25B6 Start demo sender")
         target_entry.configure(state="normal")
 
     def _toggle_demo():
@@ -704,27 +778,30 @@ def _run_with_gui(args, rest):
         else:
             _start_demo()
 
-    ttk.Button(demo_frame, textvariable=demo_btn_var, command=_toggle_demo).pack(
+    ttk.Button(advanced_frame, textvariable=demo_btn_var, command=_toggle_demo).pack(
         anchor="w"
     )
-    _selectable_entry(demo_frame, demo_status_var, width=48).pack(
-        anchor="w", fill="x", pady=(6, 4)
+    ttk.Label(advanced_frame, textvariable=demo_status_var, style="Muted.TLabel").pack(
+        anchor="w", pady=(4, 0)
     )
 
     def _toggle_target():
         target_expanded["value"] = not target_expanded["value"]
         if target_expanded["value"]:
             target_row.pack(anchor="w", fill="x", pady=(4, 0))
-            target_toggle_var.set("▾ Hide target")
+            target_toggle_var.set("\u25BE Hide target")
         else:
             target_row.pack_forget()
-            target_toggle_var.set("▸ Send to another PC…")
+            target_toggle_var.set("\u25B8 Send to another PC\u2026")
 
     ttk.Button(
-        demo_frame, textvariable=target_toggle_var, command=_toggle_target, width=28
-    ).pack(anchor="w")
+        advanced_frame,
+        textvariable=target_toggle_var,
+        command=_toggle_target,
+        style="Link.TButton",
+    ).pack(anchor="w", pady=(6, 0))
 
-    target_row = ttk.Frame(demo_frame)
+    target_row = ttk.Frame(advanced_frame)
     target_entry = ttk.Combobox(
         target_row,
         textvariable=target_var,
@@ -734,8 +811,8 @@ def _run_with_gui(args, rest):
     target_entry.pack(side="left", padx=(0, 6))
     ttk.Label(
         target_row,
-        text="host or host:5555 (blank = localhost)",
-        foreground="#888",
+        text="host or host:5555  \u2014  blank = localhost",
+        style="Help.TLabel",
     ).pack(side="left")
     # target_row starts hidden
 
@@ -746,25 +823,30 @@ def _run_with_gui(args, rest):
                 demo_status_var.set(f"error: {stats['error']}")
             else:
                 demo_status_var.set(
-                    f"{stats['count']} samples sent  ·  {stats['elapsed']:.1f} s"
+                    f"{stats['count']} samples sent  \u00B7  {stats['elapsed']:.1f} s"
                 )
         root.after(250, poll_demo_stats)
 
     poll_demo_stats()
 
-    # ----- Settings section (save plot destination) -------------------
-    settings_frame = ttk.LabelFrame(frame, text="Settings", padding=10)
-    settings_frame.pack(fill="x", pady=(10, 0))
+    # --- Save folder sub-section ---
+    ttk.Separator(advanced_frame, orient="horizontal").pack(fill="x", pady=(14, 10))
+    ttk.Label(advanced_frame, text="Save plots", style="Section.TLabel").pack(
+        anchor="w"
+    )
+    ttk.Label(
+        advanced_frame,
+        text="Folder where \"Save Plot\" writes .parquet files.",
+        style="Help.TLabel",
+    ).pack(anchor="w", pady=(2, 6))
 
-    ttk.Label(settings_frame, text="Save plots to:").pack(anchor="w")
-    save_row = ttk.Frame(settings_frame)
-    save_row.pack(fill="x", pady=(4, 0))
+    save_row = ttk.Frame(advanced_frame)
+    save_row.pack(fill="x")
     save_dir_var = tk.StringVar(value=initial_save_dir)
     save_dir_entry = ttk.Entry(save_row, textvariable=save_dir_var)
     save_dir_entry.pack(side="left", fill="x", expand=True)
 
     def _apply_save_dir(new_dir):
-        """Persist the user's save-dir choice and retarget the running server."""
         if not new_dir:
             return
         new_dir = os.path.abspath(new_dir)
@@ -776,9 +858,8 @@ def _run_with_gui(args, rest):
             return
         settings["save_dir"] = new_dir
         _save_settings(settings)
-        # Retarget the already-running server without needing a restart.
         try:
-            sb.PLOT_SAVE_PATH = new_dir  # noqa: SLF001 — intentional module global override
+            sb.PLOT_SAVE_PATH = new_dir  # noqa: SLF001 — intentional
             print(f"save dir changed to {new_dir}")
         except Exception as exc:  # noqa: BLE001
             _log(f"failed to retarget save dir on server: {exc}")
@@ -794,8 +875,8 @@ def _run_with_gui(args, rest):
             save_dir_var.set(chosen)
             _apply_save_dir(chosen)
 
-    ttk.Button(save_row, text="…", command=_browse_save_dir, width=3).pack(
-        side="left", padx=(4, 0)
+    ttk.Button(save_row, text="Browse\u2026", command=_browse_save_dir).pack(
+        side="left", padx=(6, 0)
     )
 
     def _on_save_dir_commit(_event=None):
@@ -804,14 +885,15 @@ def _run_with_gui(args, rest):
     save_dir_entry.bind("<Return>", _on_save_dir_commit)
     save_dir_entry.bind("<FocusOut>", _on_save_dir_commit)
 
-    # ----- collapsable log panel --------------------------------------
+    # --- Log sub-section (further collapsable inside advanced) ---
+    ttk.Separator(advanced_frame, orient="horizontal").pack(fill="x", pady=(14, 10))
     log_state = {"expanded": False}
-    toggle_var = tk.StringVar(value="▸ Show log")
-    log_frame = ttk.Frame(frame)
+    log_toggle_var = tk.StringVar(value="\u25B8 Show server log")
 
+    log_frame = ttk.Frame(advanced_frame)
     log_text = tk.Text(
         log_frame,
-        height=8,
+        height=10,
         width=60,
         wrap="word",
         state="disabled",
@@ -828,29 +910,24 @@ def _run_with_gui(args, rest):
     log_text.pack(side="left", fill="both", expand=True)
     log_scroll.pack(side="right", fill="y")
 
-    def set_log_size(expanded):
+    def set_log_expanded(expanded):
         log_state["expanded"] = expanded
         if expanded:
-            toggle_var.set("▾ Hide log")
-            log_frame.pack(fill="both", expand=True, pady=(8, 0))
-            root.geometry("560x700")
+            log_toggle_var.set("\u25BE Hide server log")
+            log_frame.pack(fill="both", expand=True, pady=(6, 0))
         else:
-            toggle_var.set("▸ Show log")
+            log_toggle_var.set("\u25B8 Show server log")
             log_frame.pack_forget()
-            root.geometry("520x560")
+        _relayout_window()
 
-    def toggle_log():
-        set_log_size(not log_state["expanded"])
-
-    ttk.Button(frame, textvariable=toggle_var, command=toggle_log, width=14).pack(
-        anchor="w", pady=(12, 0)
-    )
-    set_log_size(False)
+    ttk.Button(
+        advanced_frame,
+        textvariable=log_toggle_var,
+        command=lambda: set_log_expanded(not log_state["expanded"]),
+        style="Link.TButton",
+    ).pack(anchor="w")
 
     def pump_logs():
-        # Drain everything currently in the queue — typical rate is low
-        # (boot-time prints plus the occasional ZMQ reconfigure), so a
-        # single burst on each tick is fine.
         chunks = []
         while True:
             try:
@@ -860,8 +937,6 @@ def _run_with_gui(args, rest):
         if chunks:
             log_text.configure(state="normal")
             log_text.insert("end", "".join(chunks))
-            # Cap the retained log at ~5000 lines so it doesn't grow
-            # forever in a long-running session.
             num_lines = int(log_text.index("end-1c").split(".")[0])
             if num_lines > 5000:
                 log_text.delete("1.0", f"{num_lines - 5000}.0")
@@ -871,15 +946,46 @@ def _run_with_gui(args, rest):
 
     pump_logs()
 
+    # ---- Status bar at the bottom ----
+    status_bar_var = tk.StringVar(value="starting\u2026")
+    status_bar = tk.Label(
+        root,
+        textvariable=status_bar_var,
+        bg="#e8e8e8",
+        fg="#555",
+        font=("Segoe UI", 8),
+        padx=14,
+        pady=4,
+        anchor="w",
+    )
+    status_bar.pack(side="bottom", fill="x")
+
+    def poll_status_bar():
+        try:
+            zm = getattr(sb, "zmq_status", {}) or {}
+            mode = zm.get("mode", "?")
+            target = zm.get("target", "")
+            state_d = getattr(sb, "state", {}) or {}
+            fps = state_d.get("fps", 0) or 0
+            num_clients = len(getattr(sb, "ws_clients", set()) or set())
+            mode_label = (
+                f"ZMQ {mode}" if mode != "connect" else f"ZMQ \u2192 {target}"
+            )
+            client_word = "browser" if num_clients == 1 else "browsers"
+            status_bar_var.set(
+                f"{mode_label}   \u00B7   {fps:.0f} Hz   \u00B7   {num_clients} {client_word}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            status_bar_var.set(f"status error: {exc}")
+        root.after(500, poll_status_bar)
+
+    poll_status_bar()
+    _relayout_window()  # initial sizing
+
     def on_close():
-        # Stop the demo sender thread first so it doesn't try to send
-        # through a half-closed ZMQ socket during interpreter shutdown.
         if demo_state["running"] and demo_state["stop"]:
             demo_state["stop"].set()
         root.destroy()
-        # Kill the server thread hard — it's a daemon but aiohttp's
-        # event loop may not exit cleanly during process teardown on
-        # Windows, and leaving it to interpreter shutdown is slower.
         os._exit(0)
 
     root.protocol("WM_DELETE_WINDOW", on_close)
