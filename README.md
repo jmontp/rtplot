@@ -12,10 +12,17 @@ Typical use: a robot or data-acquisition script runs on a Raspberry Pi or
 microcontroller host, and you watch live signals and tweak gains from a
 laptop on the same network.
 
+**Looking for runnable examples?** Every subfolder in
+[`examples/`](examples/) is a small, self-contained script with its own
+`README.md` and a static `snapshot.html` you can open in a browser to
+preview what the plot looks like without running anything.
+
 ---
 
 ## Table of contents
 
+- [How it works](#how-it-works)
+- [Your first plot, step by step](#your-first-plot-step-by-step)
 - [Highlights](#highlights)
 - [Install](#install)
 - [60-second quickstart](#60-second-quickstart)
@@ -31,6 +38,89 @@ laptop on the same network.
 - [Performance tuning](#performance-tuning)
 - [CLI reference](#cli-reference)
 - [Examples](#examples)
+
+---
+
+## How it works
+
+rtplot has two pieces that run independently:
+
+- The **server** is a small program that shows plots in a web browser.
+  You start it once (or download it as a standalone Windows/Linux/macOS
+  exe from the [Releases page](https://github.com/jmontp/rtplot/releases))
+  and it sits there waiting for data.
+- The **client** is a tiny Python library you import from your own
+  script. Calling `client.send_array(value)` in your loop makes a new
+  data point appear on the server's plot.
+
+Picture it like this:
+
+```
+    ┌──────────────────────┐            ┌──────────────────────┐
+    │  Your Python script  │            │    rtplot-server     │
+    │                      │            │                      │
+    │ from rtplot import   │── ZMQ ───▶ │  ┌────────────────┐  │
+    │    client            │   :5555    │  │ browser tab at │  │
+    │                      │            │  │ localhost:8050 │  │
+    │ client.send_array()  │ ◀── ZMQ ── │  └────────────────┘  │
+    │                      │   :5556    │                      │
+    └──────────────────────┘            └──────────────────────┘
+       (the client lib)                   (the exe or module)
+```
+
+Data flows from your script to the server on **ZMQ port 5555**. When
+the server runs the interactive-controls feature, button clicks and
+slider values flow **back** to your script on port **5556**. The
+server also hosts an HTTP page on port **8050** that any browser can
+open to see the live plot.
+
+The two pieces don't have to run on the same machine. Running rtplot
+on a Raspberry Pi and watching the plots from your laptop is the same
+code — just tell the client where the server is (or vice versa).
+
+---
+
+## Your first plot, step by step
+
+**Step 0** — install rtplot with the browser server bundled:
+
+```bash
+pip install "better-rtplot[browser]"
+```
+
+**Step 1** — start the server. In **one** terminal:
+
+```bash
+python -m rtplot.server_browser
+```
+
+It prints a URL like `http://localhost:8050`. Open that in a browser.
+The page is blank for now — no data has been sent yet, which is fine.
+
+**Step 2** — write and run your script. In **another** terminal, save
+this as `my_plot.py`:
+
+```python
+from rtplot import client
+import time
+
+client.local_plot()                         # point at the server on this machine
+client.initialize_plots(["my signal"])      # declare one plot with one trace
+
+for i in range(1000):
+    client.send_array(i * 0.01)             # ship one sample per iteration
+    time.sleep(0.01)
+```
+
+Run it: `python my_plot.py`.
+
+**Step 3** — switch back to the browser tab. A rising-line plot is
+now drawing itself in real time.
+
+That's everything you need to get started. The rest of this README is
+a reference for options, styling, interactive controls, and remote
+networking, plus a [gallery of example scripts](examples/) you can
+open in a browser as static snapshots before running them yourself.
 
 ---
 

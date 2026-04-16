@@ -1823,6 +1823,223 @@ async def handle_index(request):
     )
 
 
+# ------------------------------------------------------------------ snapshot
+# GET /snapshot.html returns a self-contained static HTML file that
+# reproduces the current plot visually without needing any server
+# connection. uPlot's JS + CSS are inlined, the visible buffer and
+# per-plot config are embedded as JSON, and a small bootstrap script
+# calls `new uPlot(opts, data, container)` on page load. Pass
+# ?animate=1 to also embed a setInterval loop that keeps scrolling
+# the data so the plot looks alive.
+#
+# Example scripts use this via client.save_snapshot("path.html"), so
+# they can commit a reproducible static preview alongside the code.
+
+def _read_static_asset(name: str) -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "static", name)
+    with open(path, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+# Loaded once at module import so per-request cost is just JSON + format.
+try:
+    _UPLOT_JS = _read_static_asset("uPlot.iife.min.js")
+    _UPLOT_CSS = _read_static_asset("uPlot.min.css")
+except Exception as _exc:  # noqa: BLE001
+    _UPLOT_JS = f"/* uPlot load failed: {_exc} */"
+    _UPLOT_CSS = ""
+
+
+_SNAPSHOT_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>rtplot snapshot</title>
+<style>__UPLOT_CSS__</style>
+<style>
+  html, body { margin: 0; padding: 0; background: #fafafa; color: #222;
+               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #plots { display: flex; flex-direction: column; gap: 12px;
+           max-width: 900px; margin: 0 auto; padding: 20px 16px; }
+  .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; }
+  .snap-footer { text-align: center; font-size: 12px; color: #999; padding: 8px 0 20px; }
+  .snap-footer a { color: #2a5db0; text-decoration: none; }
+  .snap-footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div id="plots"></div>
+<p class="snap-footer">
+  static snapshot from
+  <a href="https://github.com/jmontp/rtplot">rtplot</a>
+  &middot; drag to zoom, double-click to reset
+</p>
+<script>__UPLOT_JS__</script>
+<script>
+(function () {
+  const SNAP = __SNAPSHOT_JSON__;
+  const plotsDiv = document.getElementById('plots');
+  const COLOR_MAP = { r:'rgb(255,0,0)', g:'rgb(0,200,0)', b:'rgb(0,0,255)',
+                      c:'rgb(0,200,200)', m:'rgb(200,0,200)',
+                      y:'rgb(200,200,0)', k:'rgb(0,0,0)' };
+  const DEFAULT_COLORS = ['r','g','b','c','m','y'];
+  function resolveColor(c) {
+    if (c == null) return 'rgb(0,0,0)';
+    if (Array.isArray(c) && c.length >= 3) return `rgb(${c[0]},${c[1]},${c[2]})`;
+    if (typeof c === 'string') return COLOR_MAP[c] || c;
+    return 'rgb(0,0,0)';
+  }
+  const plots = [];
+  let traceOffset = 0;
+  SNAP.plots.forEach(function (pcfg) {
+    const xrange = SNAP.num_samples;
+    const xs = new Float64Array(xrange);
+    for (let i = 0; i < xrange; i++) xs[i] = i;
+    const traceCount = pcfg.names.length;
+    const colors = pcfg.colors || DEFAULT_COLORS;
+    const widths = pcfg.line_width || [];
+    const styles = pcfg.line_style || [];
+    const series = [{}];
+    for (let t = 0; t < traceCount; t++) {
+      series.push({
+        label: pcfg.names[t],
+        stroke: resolveColor(colors[t]),
+        width: widths[t] || 1,
+        dash: (styles[t] === '-') ? [10, 5] : undefined,
+        points: { show: false },
+      });
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'plot-wrap';
+    plotsDiv.appendChild(wrap);
+    const data = [xs];
+    for (let t = 0; t < traceCount; t++) {
+      const src = SNAP.trace_data[traceOffset + t];
+      data.push(Float64Array.from(src));
+    }
+    const opts = {
+      width: Math.max(640, plotsDiv.clientWidth - 40),
+      height: 260,
+      title: pcfg.title || '',
+      scales: {
+        x: { time: false, range: [0, xrange - 1] },
+        y: pcfg.yrange ? { range: [pcfg.yrange[0], pcfg.yrange[1]] } : {},
+      },
+      axes: [{ label: pcfg.xlabel || '' }, { label: pcfg.ylabel || '' }],
+      series: series,
+      legend: { show: true },
+      cursor: { drag: { x: true, y: false } },
+    };
+    const u = new uPlot(opts, data, wrap);
+    plots.push({ uplot: u, data: data, xs: xs, xrange: xrange,
+                 traceCount: traceCount, startIdx: traceOffset });
+    traceOffset += traceCount;
+  });
+  // Tier-2 animated replay: keep rolling the ring buffer so the plot
+  // looks "live". Disabled unless the /snapshot.html?animate=1 query
+  // was set at save time.
+  if (SNAP.animate) {
+    let phase = 0;
+    setInterval(function () {
+      phase = (phase + 1) % SNAP.num_samples;
+      plots.forEach(function (p) {
+        const nd = [p.xs];
+        for (let t = 0; t < p.traceCount; t++) {
+          const src = SNAP.trace_data[p.startIdx + t];
+          const out = new Float64Array(p.xrange);
+          for (let i = 0; i < p.xrange; i++) {
+            out[i] = src[(i + phase) % p.xrange];
+          }
+          nd.push(out);
+        }
+        p.uplot.setData(nd);
+      });
+    }, 33);
+  }
+  window.addEventListener('resize', function () {
+    plots.forEach(function (p) {
+      p.uplot.setSize({
+        width: Math.max(640, plotsDiv.clientWidth - 40),
+        height: 260,
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>
+"""
+
+
+def _build_snapshot_html(animate: bool) -> str:
+    """Serialize the current plot state into a static snapshot HTML document."""
+    # Determine the visible window in the ring buffer. If no data has
+    # arrived yet, return an "empty" snapshot with a helpful note.
+    li = state.get("li", 0)
+    num_points = state.get("num_datapoints_in_plot", DEFAULT_NUM_DATAPOINTS_IN_PLOT)
+    num_traces = state.get("num_traces", 0)
+    if num_traces == 0 or not state.get("initialized", False):
+        return (
+            "<!doctype html><html><body style='font-family:sans-serif;padding:32px'>"
+            "<h1>rtplot snapshot</h1>"
+            "<p>No plot has been initialized yet — start your client and "
+            "call <code>initialize_plots()</code> first, then hit "
+            "<code>/snapshot.html</code> again.</p></body></html>"
+        )
+    lo = max(0, li - num_points)
+    hi = li
+
+    # Rebuild the per-plot configs from the OrderedDict the user sent.
+    plots = []
+    cfg = state.get("config_dict") or OrderedDict()
+    for key, plot_description in cfg.items():
+        if "non_plot_labels" in plot_description or "controls" in plot_description:
+            continue
+        plots.append({
+            "key": key,
+            "names": plot_description.get("names", []),
+            "colors": plot_description.get("colors"),
+            "line_style": plot_description.get("line_style"),
+            "line_width": plot_description.get("line_width"),
+            "title": plot_description.get("title"),
+            "xlabel": plot_description.get("xlabel"),
+            "ylabel": plot_description.get("ylabel"),
+            "yrange": plot_description.get("yrange"),
+        })
+
+    # Extract the last `num_points` samples for each plotted trace.
+    trace_data = []
+    arr = local_storage_buffer[:num_traces, lo:hi]
+    for i in range(num_traces):
+        trace_data.append([float(v) for v in arr[i]])
+
+    payload = {
+        "plots": plots,
+        "num_samples": int(hi - lo),
+        "trace_data": trace_data,
+        "animate": bool(animate),
+    }
+
+    # Use a placeholder-replace strategy instead of .format() so the
+    # uPlot minified JS's {} braces don't need to be escaped.
+    html = _SNAPSHOT_TEMPLATE
+    html = html.replace("__UPLOT_CSS__", _UPLOT_CSS)
+    html = html.replace("__UPLOT_JS__", _UPLOT_JS)
+    html = html.replace("__SNAPSHOT_JSON__", json.dumps(payload))
+    return html
+
+
+async def handle_snapshot(request):
+    animate = request.query.get("animate") == "1"
+    html = _build_snapshot_html(animate=animate)
+    return web.Response(
+        text=html,
+        content_type="text/html",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def handle_ws(request):
     ws = web.WebSocketResponse(max_msg_size=0)
     await ws.prepare(request)
@@ -1924,6 +2141,7 @@ def build_app():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/ws", handle_ws)
+    app.router.add_get("/snapshot.html", handle_snapshot)
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
     app.router.add_static("/static/", static_dir)
     app.on_startup.append(on_startup)

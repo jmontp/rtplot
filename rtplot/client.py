@@ -399,3 +399,52 @@ def poll_controls():
     buttons = _control_button_events
     _control_button_events = []
     return ControlState(values=dict(_control_slider_values), buttons=buttons)
+
+
+def save_snapshot(path, server_url=None, animate=False, timeout=5.0):
+    """Download a static HTML snapshot of the current plot to ``path``.
+
+    The server exposes a ``/snapshot.html`` endpoint that renders the
+    current plot state as a self-contained HTML file with uPlot's JS +
+    CSS inlined plus the most recent window of trace data. The result
+    opens in any browser offline and looks pixel-identical to what the
+    live tab was showing. Ideal for committing reproducible example
+    previews to a repo or emailing a static "here's what I was seeing"
+    artifact.
+
+    Parameters
+    ----------
+    path : str
+        Local filename to write the HTML to (e.g. ``"snapshot.html"``).
+    server_url : str, optional
+        Base URL of the rtplot browser server. Defaults to
+        ``http://localhost:8050`` — adjust if you started the server
+        with a non-default ``--port`` or you're snapshotting a remote
+        server. Accepts with or without scheme / trailing slash.
+    animate : bool, optional
+        If True, the snapshot HTML also embeds a small replay loop so
+        the plot keeps scrolling smoothly in the browser (useful for
+        gallery previews that benefit from visible motion).
+    timeout : float, optional
+        Seconds to wait for the HTTP GET to complete. Default 5.0.
+
+    Returns
+    -------
+    str
+        The absolute path the snapshot was written to.
+    """
+    import os as _os
+    from urllib.request import urlopen as _urlopen
+
+    base = server_url or "http://localhost:8050"
+    base = base.strip().rstrip("/")
+    if not base.lower().startswith(("http://", "https://")):
+        base = "http://" + base
+    url = base + "/snapshot.html" + ("?animate=1" if animate else "")
+
+    with _urlopen(url, timeout=timeout) as resp:  # noqa: S310 — local HTTP to our own server
+        body = resp.read()
+    abs_path = _os.path.abspath(path)
+    with open(abs_path, "wb") as fh:
+        fh.write(body)
+    return abs_path
