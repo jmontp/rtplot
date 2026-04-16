@@ -158,12 +158,13 @@ class Plot:
 class Button:
     id: str
     label: str
+    color: Optional[str] = None
     height: Optional[float] = None
 
     def to_dict(self):
         return _drop_none({
             "type": "button", "id": self.id, "label": self.label,
-            "height": self.height,
+            "color": self.color, "height": self.height,
         })
 
 
@@ -176,13 +177,15 @@ class Slider:
     value: float = 0.0
     step: Optional[float] = None
     format: Optional[str] = None
+    color: Optional[str] = None
     height: Optional[float] = None
 
     def to_dict(self):
         return _drop_none({
             "type": "slider", "id": self.id, "label": self.label,
             "min": self.min, "max": self.max, "value": self.value,
-            "step": self.step, "format": self.format, "height": self.height,
+            "step": self.step, "format": self.format,
+            "color": self.color, "height": self.height,
         })
 
 
@@ -196,6 +199,7 @@ class Dial:
     step: Optional[float] = None
     sensitivity: Optional[float] = None
     format: Optional[str] = None
+    color: Optional[str] = None
     height: Optional[float] = None
 
     def to_dict(self):
@@ -203,7 +207,8 @@ class Dial:
             "type": "dial", "id": self.id, "label": self.label,
             "min": self.min, "max": self.max, "value": self.value,
             "step": self.step, "sensitivity": self.sensitivity,
-            "format": self.format, "height": self.height,
+            "format": self.format, "color": self.color,
+            "height": self.height,
         })
 
 

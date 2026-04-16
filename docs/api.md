@@ -78,9 +78,9 @@ single call.
 |---|---|
 | `{"names": [...], ...}` | `Plot(names=[...], ...)` |
 | `{"controls": [...]}` | `ControlsRow([...])` |
-| `{"type": "button", "id": "...", "label": "..."}` | `Button(id, label, height=None)` |
-| `{"type": "slider", ...}` | `Slider(id, label, min, max, value=0.0, step=None, format=None, height=None)` |
-| `{"type": "dial", ...}` | `Dial(id, label, min, max, value=0.0, step=None, sensitivity=None, format=None, height=None)` |
+| `{"type": "button", "id": "...", "label": "..."}` | `Button(id, label, color=None, height=None)` |
+| `{"type": "slider", ...}` | `Slider(id, label, min, max, value=0.0, step=None, format=None, color=None, height=None)` |
+| `{"type": "dial", ...}` | `Dial(id, label, min, max, value=0.0, step=None, sensitivity=None, format=None, color=None, height=None)` |
 | `{"type": "display", ...}` | `Display(id, label, format=None, height=None)` |
 | `{"type": "text", ...}` | `Text(id, label, value="", height=None)` |
 
@@ -195,8 +195,8 @@ string for `text` elements. Updates are coalesced at ~30 Hz.
 
 | Type | Purpose | Notable fields |
 |---|---|---|
-| `button` | Discrete event on click | `id`, `label`, `height` |
-| `slider` | Scalar input, horizontal range | `id`, `label`, `min`, `max`, `value`, `step`, `format`, `height` |
+| `button` | Discrete event on click | `id`, `label`, `color`, `height` |
+| `slider` | Scalar input, horizontal range | `id`, `label`, `min`, `max`, `value`, `step`, `format`, `color`, `height` |
 | `dial` | Scalar input, vertical drag | same as slider, plus `sensitivity` (rotations per range; default `1.0`) |
 | `display` | Read-only numeric readout | `id`, `label`, `format`, `height` |
 | `text` | Read-only text field | `id`, `label`, `value`, `height` |
@@ -207,6 +207,10 @@ the full range; `0.25` needs four rotations for finer control.
 
 `format` accepts Python `{:.Nf}` strings. `height` is a row-height
 multiplier (default `1`); use `2` for a double-tall dial or button.
+`color` accepts the same values as plot trace colors — short codes
+(`r g b c m y k w`), CSS strings (`"#ff8800"`, `"rgb(...)"`), or
+`[r, g, b]` tuples; it tints the button background, the slider thumb
+(`accent-color`), and the dial indicator.
 
 See [`examples/03_interactive_controls/`](../examples/03_interactive_controls/)
 for a runnable walkthrough.

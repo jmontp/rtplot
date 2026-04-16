@@ -31,16 +31,17 @@ client.initialize_plots([
         ylabel="amplitude",
     ),
     ControlsRow([
-        Button("reset", "Reset"),
-        Button("pause", "Pause"),
+        Button("reset", "Reset", color="#b0d4ff"),
+        Button("pause", "Pause", color="#ffd27a"),
     ]),
     ControlsRow([
         Slider("gain", "Gain", min=0, max=5, value=1.0,
-               step=0.1, format="{:.2f}"),
+               step=0.1, format="{:.2f}", color="g"),
     ]),
     ControlsRow([
         Dial("freq", "Freq (Hz)", min=0.1, max=5.0, value=1.0,
-             step=0.05, sensitivity=0.5, format="{:.2f}"),
+             step=0.05, sensitivity=0.5, format="{:.2f}",
+             color="#c0392b"),
     ]),
     ControlsRow([
         Text("status", "Status", value="running"),

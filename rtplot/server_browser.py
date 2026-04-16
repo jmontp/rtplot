@@ -787,6 +787,8 @@ INDEX_HTML = """<!doctype html>
   .ctrl-item-tall > .ctrl-val { align-self: center; }
   .ctrl-btn:hover { background: #f0f0f0; }
   .ctrl-btn:active { background: #e2e2e2; }
+  .ctrl-btn-colored:hover { filter: brightness(0.93); }
+  .ctrl-btn-colored:active { filter: brightness(0.85); }
   .ctrl-slider .ctrl-rangeinput { flex: 1; min-width: 120px; }
   .ctrl-numinput { width: 72px; font-family: monospace; font-size: calc(13px * var(--ui-scale)); padding: 4px 6px; border: 1px solid #b8b8b8; border-radius: 3px; background: #fff; color: #222; text-align: right; -moz-appearance: textfield; }
   .ctrl-numinput::-webkit-outer-spin-button,
@@ -1093,6 +1095,7 @@ INDEX_HTML = """<!doctype html>
           min, max, step, initial: value,
           commit, applyLocal,
           sensitivity, hasMin, hasMax,
+          color: el.color,
         });
         if (widget && widget.node) item.appendChild(widget.node);
 
@@ -1127,7 +1130,7 @@ INDEX_HTML = """<!doctype html>
         return item;
       }
 
-      function buildSliderWidget({ min, max, step, initial, commit, applyLocal, hasMin, hasMax }) {
+      function buildSliderWidget({ min, max, step, initial, commit, applyLocal, hasMin, hasMax, color }) {
         // HTML range inputs can't represent unbounded values, so fall back
         // to sane defaults when the user omits min/max on a slider.
         const rangeMin = hasMin ? min : 0;
@@ -1137,6 +1140,7 @@ INDEX_HTML = """<!doctype html>
         range.className = 'ctrl-rangeinput';
         range.min = rangeMin;
         range.max = rangeMax;
+        if (color != null) range.style.accentColor = resolveColor(color);
         range.step = step;
         range.value = initial;
         // Live preview: update the number box (and any other mirrors) on every
@@ -1149,7 +1153,7 @@ INDEX_HTML = """<!doctype html>
         };
       }
 
-      function buildDialWidget({ min, max, initial, commit, applyLocal, sensitivity, hasMin, hasMax }) {
+      function buildDialWidget({ min, max, initial, commit, applyLocal, sensitivity, hasMin, hasMax, color }) {
         const svgNS = 'http://www.w3.org/2000/svg';
         const size = 100;
         const svg = document.createElementNS(svgNS, 'svg');
@@ -1185,6 +1189,7 @@ INDEX_HTML = """<!doctype html>
 
         const indicator = document.createElementNS(svgNS, 'line');
         indicator.classList.add('dial-indicator');
+        if (color != null) indicator.style.stroke = resolveColor(color);
         svg.appendChild(indicator);
 
         // Unified rotation math: the indicator advances by 2π radians for
@@ -1270,6 +1275,12 @@ INDEX_HTML = """<!doctype html>
           const b = document.createElement('button');
           b.className = 'ctrl-btn';
           b.textContent = el.label || el.id;
+          if (el.color != null) {
+            const c = resolveColor(el.color);
+            b.style.backgroundColor = c;
+            b.style.borderColor = c;
+            b.classList.add('ctrl-btn-colored');
+          }
           b.addEventListener('click', () => sendCtrl({ type: 'control_button', id: el.id }));
           item.appendChild(b);
         } else if (el.type === 'slider') {
