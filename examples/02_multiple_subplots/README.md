@@ -52,4 +52,4 @@ styling pool.
 
 Pinning a `yrange` on each plot is the biggest single perf win for
 high-rate streams, because rtplot can skip the autoscale recomputation
-on every frame. See the README's Performance section for more.
+on every frame.

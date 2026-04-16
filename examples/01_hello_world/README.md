@@ -40,7 +40,7 @@ Everything else in the script is styling and the snapshot save at the
 end.
 
 - `client.local_plot()` is shorthand for `client.configure_ip("127.0.0.1")`. If your server lives on another machine, pass its IP instead.
-- `client.initialize_plots([{"names": ["signal"], ...}])` declares a single plot with one trace called `signal`. The `names` list is the only required field; `colors`, `title`, `yrange`, `xlabel`, `ylabel`, `line_width`, `line_style`, `xrange` are all optional styling — see the main README for the full schema.
+- `client.initialize_plots([{"names": ["signal"], ...}])` declares a single plot with one trace called `signal`. The `names` list is the only required field; `colors`, `title`, `yrange`, `xlabel`, `ylabel`, `line_width`, `line_style`, `xrange` are all optional styling — see the [API reference](../../docs/api.md#plot-configuration) for the full schema.
 - `client.send_array(value)` accepts a float, a list of floats, a 1-D numpy array, or a 2-D numpy array. The call is non-blocking, ~microsecond cost, safe to call from a tight loop.
 
 ## What `save_snapshot` does
