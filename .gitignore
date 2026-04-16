@@ -1,5 +1,3 @@
 __*
 *.egg*
 dist/
-# Saved plot outputs from Save-Plot / client.save_plot() runs.
-*.parquet
