@@ -23,6 +23,7 @@ interactive plot you can pan and zoom.
 | [01 – Hello, sine wave](01_hello_world/) | The minimum three client calls: `local_plot`, `initialize_plots`, `send_array`. | [run.py](01_hello_world/run.py) · [snapshot](01_hello_world/snapshot.html) |
 | [02 – Multiple subplots](02_multiple_subplots/) | Multi-plot layouts, multi-trace plots, per-plot styling, flat-list `send_array`. | [run.py](02_multiple_subplots/run.py) · [snapshot](02_multiple_subplots/snapshot.html) |
 | [03 – Interactive controls](03_interactive_controls/) | Buttons, sliders, dials, and display boxes that drive your Python loop live. | [run.py](03_interactive_controls/run.py) · [snapshot](03_interactive_controls/snapshot.html) |
+| [04 – Typed configuration](04_typed_configuration/) | Same behavior as 03, written with the typed `Plot` / `ControlsRow` / `Button` / `Slider` / `Dial` / `Display` / `Text` dataclasses instead of raw dicts. | [run.py](04_typed_configuration/run.py) · [snapshot](04_typed_configuration/snapshot.html) |
 
 ## How to run an example
 

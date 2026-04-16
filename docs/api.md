@@ -68,6 +68,47 @@ Styled-plot dict keys:
 `{"controls": [...]}` as an entry adds a row of [interactive
 controls](#interactive-controls) in place of a plot.
 
+### Typed form (dataclasses)
+
+`initialize_plots` also accepts typed objects from `rtplot.client` for
+the same configuration. Use whichever form you prefer — both serialize
+to the identical on-the-wire dict, and they can be mixed freely in a
+single call.
+
+| Dict key(s) | Typed equivalent |
+|---|---|
+| `{"names": [...], ...}` | `Plot(names=[...], ...)` |
+| `{"controls": [...]}` | `ControlsRow([...])` |
+| `{"type": "button", "id": "...", "label": "..."}` | `Button(id, label, height=None)` |
+| `{"type": "slider", ...}` | `Slider(id, label, min, max, value=0.0, step=None, format=None, height=None)` |
+| `{"type": "dial", ...}` | `Dial(id, label, min, max, value=0.0, step=None, sensitivity=None, format=None, height=None)` |
+| `{"type": "display", ...}` | `Display(id, label, format=None, height=None)` |
+| `{"type": "text", ...}` | `Text(id, label, value="", height=None)` |
+
+```python
+from rtplot.client import Plot, ControlsRow, Button, Slider
+
+client.initialize_plots([
+    Plot(names=["signal"], yrange=(-6, 6), title="demo"),
+    ControlsRow([
+        Button("reset", "Reset"),
+        Slider("gain", "Gain", min=0, max=5, value=1.0),
+    ]),
+])
+```
+
+Why you might prefer the typed form: editor autocomplete, `TypeError`
+on unknown keys (instead of silently-ignored typos), and required
+fields enforced at call time. The dict form stays supported — use it
+for quick scripts or when the layout comes from a config file.
+
+`yrange` / `xrange` accept tuples on the dataclass and lists on the
+dict form; both go over the wire as JSON lists.
+
+See
+[`examples/04_typed_configuration/`](../examples/04_typed_configuration/)
+for a runnable side-by-side with example 03.
+
 ---
 
 ## Sending data

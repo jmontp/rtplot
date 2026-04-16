@@ -2,6 +2,8 @@ import zmq
 import numpy as np
 import time
 from collections import OrderedDict, namedtuple
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple, Union
 
 ###################
 # ZMQ Networking #
@@ -84,6 +86,166 @@ SENDING_DISPLAY = "4"
 
 #Lightweight result type returned by poll_controls()
 ControlState = namedtuple("ControlState", ["values", "buttons"])
+
+
+##########################################
+# Typed plot / controls configuration API #
+##########################################
+#
+# These dataclasses are an alternative to the dict-based configuration
+# accepted by initialize_plots(). Both APIs coexist — the typed form
+# serializes to the exact same on-the-wire dict, so the server is
+# unaware of which one the caller used.
+#
+#   client.initialize_plots([
+#       client.Plot(names=["signal"], yrange=(-6, 6), title="demo"),
+#       client.ControlsRow([client.Button("reset", "Reset")]),
+#   ])
+#
+# is equivalent to the classic:
+#
+#   client.initialize_plots([
+#       {"names": ["signal"], "yrange": [-6, 6], "title": "demo"},
+#       {"controls": [{"type": "button", "id": "reset", "label": "Reset"}]},
+#   ])
+
+
+def _drop_none(d):
+    # Wire format treats missing keys as "use default"; None would
+    # JSON-serialize to null which the server wouldn't handle.
+    return {k: v for k, v in d.items() if v is not None}
+
+
+def _range_to_list(r):
+    # yrange/xrange go over the wire as JSON lists.
+    return list(r) if r is not None else None
+
+
+@dataclass
+class Plot:
+    """A single plot with optional styling.
+
+    All fields beyond ``names`` are optional and mirror the styled-plot
+    dict keys documented in ``docs/api.md``.
+    """
+    names: List[str]
+    colors: Optional[List[str]] = None
+    line_style: Optional[List[str]] = None
+    line_width: Optional[float] = None
+    title: Optional[str] = None
+    xlabel: Optional[str] = None
+    ylabel: Optional[str] = None
+    yrange: Optional[Tuple[float, float]] = None
+    xrange: Optional[int] = None
+    height: Optional[float] = None
+
+    def to_dict(self):
+        return _drop_none({
+            "names": list(self.names),
+            "colors": list(self.colors) if self.colors is not None else None,
+            "line_style": list(self.line_style) if self.line_style is not None else None,
+            "line_width": self.line_width,
+            "title": self.title,
+            "xlabel": self.xlabel,
+            "ylabel": self.ylabel,
+            "yrange": _range_to_list(self.yrange),
+            "xrange": self.xrange,
+            "height": self.height,
+        })
+
+
+@dataclass
+class Button:
+    id: str
+    label: str
+    height: Optional[float] = None
+
+    def to_dict(self):
+        return _drop_none({
+            "type": "button", "id": self.id, "label": self.label,
+            "height": self.height,
+        })
+
+
+@dataclass
+class Slider:
+    id: str
+    label: str
+    min: float
+    max: float
+    value: float = 0.0
+    step: Optional[float] = None
+    format: Optional[str] = None
+    height: Optional[float] = None
+
+    def to_dict(self):
+        return _drop_none({
+            "type": "slider", "id": self.id, "label": self.label,
+            "min": self.min, "max": self.max, "value": self.value,
+            "step": self.step, "format": self.format, "height": self.height,
+        })
+
+
+@dataclass
+class Dial:
+    id: str
+    label: str
+    min: float
+    max: float
+    value: float = 0.0
+    step: Optional[float] = None
+    sensitivity: Optional[float] = None
+    format: Optional[str] = None
+    height: Optional[float] = None
+
+    def to_dict(self):
+        return _drop_none({
+            "type": "dial", "id": self.id, "label": self.label,
+            "min": self.min, "max": self.max, "value": self.value,
+            "step": self.step, "sensitivity": self.sensitivity,
+            "format": self.format, "height": self.height,
+        })
+
+
+@dataclass
+class Display:
+    id: str
+    label: str
+    format: Optional[str] = None
+    height: Optional[float] = None
+
+    def to_dict(self):
+        return _drop_none({
+            "type": "display", "id": self.id, "label": self.label,
+            "format": self.format, "height": self.height,
+        })
+
+
+@dataclass
+class Text:
+    id: str
+    label: str
+    value: str = ""
+    height: Optional[float] = None
+
+    def to_dict(self):
+        return _drop_none({
+            "type": "text", "id": self.id, "label": self.label,
+            "value": self.value, "height": self.height,
+        })
+
+
+@dataclass
+class ControlsRow:
+    """A row of control widgets, rendered in place of a plot."""
+    controls: List[Union[Button, Slider, Dial, Display, Text, dict]] = field(default_factory=list)
+
+    def to_dict(self):
+        return {"controls": [
+            c.to_dict() if hasattr(c, "to_dict") else c
+            for c in self.controls
+        ]}
+
 
 def local_plot():
     """Send data to a plot in the same computer"""
@@ -277,6 +439,11 @@ def initialize_plots(plot_descriptions=1):
         plot_desc_dict = OrderedDict()
         plot_desc_dict["plot0"] = plot_descriptions
 
+    #Process typed inputs (Plot / ControlsRow) passed alone
+    elif hasattr(plot_descriptions, "to_dict"):
+        plot_desc_dict = OrderedDict()
+        plot_desc_dict["plot0"] = plot_descriptions.to_dict()
+
     #Process lists of things
     elif isinstance(plot_descriptions, list):
 
@@ -291,10 +458,14 @@ def initialize_plots(plot_descriptions=1):
             for i,plot_desc in enumerate(plot_descriptions):
                 plot_desc_dict["plot{}".format(i)] = {"names":plot_desc}
 
-        #Process list of dics
-        elif isinstance(plot_descriptions[0],dict):
+        #Process list of dicts or typed objects (Plot / ControlsRow),
+        # including mixed lists — anything exposing .to_dict() is normalized
+        # to the wire dict form.
+        elif isinstance(plot_descriptions[0],dict) or hasattr(plot_descriptions[0], "to_dict"):
             plot_desc_dict = OrderedDict()
             for i,plot_desc in enumerate(plot_descriptions):
+                if hasattr(plot_desc, "to_dict"):
+                    plot_desc = plot_desc.to_dict()
                 plot_desc_dict["plot{}".format(i)] = plot_desc
 
     #Throw error
