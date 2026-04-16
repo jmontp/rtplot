@@ -104,6 +104,21 @@ for quick scripts or when the layout comes from a config file.
 `yrange` / `xrange` accept tuples on the dataclass and lists on the
 dict form; both go over the wire as JSON lists.
 
+### Minimum required fields
+
+The fewest arguments needed to construct each typed class. Everything
+else is optional with a sensible default.
+
+| Class | Minimum init | Optional keyword args |
+|---|---|---|
+| `Plot` | `Plot(names=["sig"])` | `colors`, `line_style`, `line_width`, `title`, `xlabel`, `ylabel`, `yrange`, `xrange`, `height` |
+| `ControlsRow` | `ControlsRow([...])` | — |
+| `Button` | `Button("id", "label")` | `color`, `height` |
+| `Slider` | `Slider("id", "label", min=0, max=1)` | `value` (default `0.0`), `step`, `format`, `color`, `height` |
+| `Dial` | `Dial("id", "label", min=0, max=1)` | `value` (default `0.0`), `step`, `sensitivity`, `format`, `color`, `height` |
+| `Display` | `Display("id", "label")` | `format`, `height` |
+| `Text` | `Text("id", "label")` | `value` (default `""`), `height` |
+
 See
 [`examples/04_typed_configuration/`](../examples/04_typed_configuration/)
 for a runnable side-by-side with example 03.
