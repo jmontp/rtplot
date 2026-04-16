@@ -26,7 +26,7 @@ preview what the plot looks like without running anything.
 - [Interactive controls](#interactive-controls)
 - [Plot configuration](#plot-configuration)
 - [Sending data](#sending-data)
-- [Saving data](#saving-data)
+- [Static HTML snapshots](#static-html-snapshots)
 - [Browser UI features](#browser-ui-features)
 - [Networking modes](#networking-modes)
 - [Viewing the plot from another device](#viewing-the-plot-from-another-device)
@@ -141,8 +141,6 @@ preview as static snapshots before running them yourself.
 - **Interactive controls.** Declare buttons, sliders, dials, and
   numeric / text displays in the same `initialize_plots` call. Poll
   from your tight loop; no threads, no callbacks.
-- **Save to Parquet** with a single button click or `client.save_plot()`
-  call.
 - **Static HTML snapshots.** `client.save_snapshot("out.html")` writes
   a self-contained HTML file with the current trace data and uPlot
   inlined. Perfect for commit-to-repo gallery previews or emailing a
@@ -160,10 +158,10 @@ Install rtplot with the server bundle:
 pip install "better-rtplot[browser]"
 ```
 
-This pulls `aiohttp` (for serving the plot UI) plus `pandas` +
-`pyarrow` (for saving runs to Parquet). If you only need the sender
-side — your script pushes data to someone else's plot host and you
-don't run a server locally — you can install the client-only minimum:
+This pulls `aiohttp` (for serving the plot UI). If you only need the
+sender side — your script pushes data to someone else's plot host and
+you don't run a server locally — you can install the client-only
+minimum:
 
 ```bash
 pip install better-rtplot
@@ -185,8 +183,8 @@ directly — no Python install needed on that machine.
 
 On Windows the binary opens a small Tk status window
 (`rtplot/server_browser_gui.py`) that shows the listening URL, ZMQ
-status, a configurable save directory, an optional demo sender for
-smoke-testing end-to-end connectivity, and a collapsable log panel.
+status, an optional demo sender for smoke-testing end-to-end
+connectivity, and a collapsable log panel.
 Senders still need Python + `pip install better-rtplot`; the binary
 only replaces the *server* side, which is the part most people don't
 want to set up on a plot-viewing machine.
@@ -338,9 +336,6 @@ Special row entries (not plots themselves):
 
 - `{"controls": [...]}` — a row of interactive controls (see
   [Interactive controls](#interactive-controls))
-- `{"non_plot_labels": ["name1", "name2"]}` — extra scalar names that
-  ride along with `send_array` and get saved into the output Parquet
-  file, but aren't rendered as traces
 
 ---
 
@@ -359,52 +354,24 @@ without dropping frames.
 
 ---
 
-## Saving data
+## Static HTML snapshots
 
-The server saves every sample it has received since the latest
-`initialize_plots` call to a Parquet file, including any
-`non_plot_labels` data that rode along with your normal data.
-
-Trigger a save from either side:
-
-- **Browser UI:** click the **Save Plot** button in the header.
-- **Python:** `client.save_plot("my_run")`
-
-Control where things get written:
-
-```bash
-python -m rtplot.server_browser -sd ./saved_plots -sn experiment1
-```
-
-- `-sd` / `--save-dir` — target directory
-- `-sn` / `--save-name` — filename prefix (a timestamp is always appended)
-
-### Save non-plot signals alongside the plotted ones
-
-```python
-client.initialize_plots([
-    {"names": ["hip_angle", "knee_angle"]},
-    {"non_plot_labels": ["battery", "cpu_temp", "loop_latency"]},
-])
-```
-
-Send `battery`, `cpu_temp` and `loop_latency` as extra rows after the
-plotted traces in each `send_array` call; they won't be drawn but they
-will land in the Parquet file.
-
-### Static HTML snapshots
+rtplot deliberately doesn't persist runs as a file format — it's a
+live-plotting tool, not a data logger. When you do want a reproducible
+artifact of what the plot looked like at a given moment, call:
 
 ```python
 client.save_snapshot("preview.html", animate=True)
 ```
 
-Writes a self-contained HTML file with uPlot JS + CSS inlined and the
-current window of trace data embedded. Opens offline in any browser,
-around 65 KB. Control widgets are *not* captured — only the plot
-portion — so the snapshot is the right artifact to commit to a repo as
-a visual regression baseline or to attach to an email. With
-`animate=True` the snapshot embeds a small replay loop so the trace
-keeps scrolling (nicer for gallery previews).
+It writes a self-contained HTML file with uPlot JS + CSS inlined and
+the current window of trace data embedded. Opens offline in any
+browser, around 65 KB. Control widgets aren't captured — only the
+plot portion — so the snapshot is the right artifact to commit to a
+repo as a visual-regression baseline, attach to an email, or drop
+into a GitHub Pages gallery. With `animate=True` the snapshot embeds
+a small replay loop so the trace keeps scrolling (nicer for gallery
+previews).
 
 The `server_url` argument defaults to `http://localhost:8050`; set it
 explicitly when snapshotting a remote server or one running on a
@@ -423,7 +390,6 @@ without restarting it.
 | Element | What it does |
 |---|---|
 | Status pill | Live data rate + render rate (e.g. `Data 480 Hz · Render 60 Hz`). Turns red when the server marks the stream unhealthy. |
-| **Save Plot** button | Writes a Parquet file of the current buffer to the server's save directory. |
 | `ZMQ …` indicator | Shows whether the server is currently **binding** (`ZMQ bind *:5555`) or **connecting outbound** (`ZMQ → host:port`). |
 | IP input | Type a `host[:port]` to retarget before clicking **Connect**. |
 | **Connect** / **Bind** buttons | Flip the server between *connect-to-a-sender* and *bind-and-wait* modes at runtime. The active mode is highlighted; the other is clickable. |
@@ -639,8 +605,6 @@ If you start running out of frames, try these, in roughly this order:
 | `-a` / `--adaptable` | off | Auto-tune skip rate to data rate |
 | `-c` / `--column` | row | Lay plots out in columns instead of rows |
 | `-d` / `--debug` | off | Extra debug logging |
-| `-sd DIR` / `--save-dir DIR` | cwd | Where to write `.parquet` saves |
-| `-sn NAME` / `--save-name NAME` | — | Prefix for saved filenames |
 
 ---
 
@@ -658,7 +622,6 @@ Every function below is imported from `rtplot.client`:
 | `send_array(A)` | Push one or more samples. Accepts float, list, 1-D numpy array, or 2-D `(num_traces, N)` numpy array. |
 | `set_display(id, value)` | Update a `display` (numeric) or `text` (string) element. |
 | `poll_controls()` | Drain the return channel non-blocking; returns `ControlState(values, buttons)`. |
-| `save_plot(name)` | Ask the server to save the current buffer to a Parquet file with prefix `name`. |
 | `save_snapshot(path, server_url=None, animate=False)` | Download a self-contained static HTML snapshot of the current plot to `path`. |
 
 ---

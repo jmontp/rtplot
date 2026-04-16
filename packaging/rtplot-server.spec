@@ -48,12 +48,11 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     # Everything here is excluded from the bundle to keep the download
-    # small. pandas + pyarrow together add ~92 MB uncompressed, almost
-    # all of which is pyarrow's arrow.dll / arrow_flight.dll. They are
-    # only needed by save_current_plot (Parquet output), and
-    # server_browser now handles the ImportError gracefully — so the
-    # browser UI still works fully, the Save Plot button just reports
-    # "pandas not installed" instead of crashing the receiver.
+    # small. pandas/pyarrow/scipy aren't direct dependencies any more
+    # (save-to-parquet was removed), but we keep them in excludes as a
+    # belt-and-suspenders in case a transitive dep ever drags one in —
+    # PyInstaller finding e.g. pyarrow would silently re-add ~80 MB to
+    # the bundle. Qt bindings are excluded for the same reason.
     excludes=[
         "matplotlib",
         "pyqtgraph",

@@ -68,8 +68,6 @@ def _settings_path():
 DEFAULT_SETTINGS = {
     # Most recent demo-sender targets, newest first, capped at 8.
     "recent_hosts": [],
-    # Directory for Save Plot output. None -> use _exe_dir() at runtime.
-    "save_dir": None,
 }
 
 MAX_RECENT_HOSTS = 8
@@ -398,13 +396,10 @@ def _run_with_gui(args, rest):
     sys.stderr = log_redirect
 
     settings = _load_settings()
-    initial_save_dir = settings.get("save_dir") or _exe_dir()
 
     # Seed sys.argv so server_browser's module-level argparse sees what we
     # want. --no-browser is always forced in GUI mode because the window
-    # has its own "Open in browser" button. --save-dir defaults to the
-    # exe's directory (or the persisted setting) instead of whatever cwd
-    # the user happened to launch from.
+    # has its own "Open in browser" button.
     forwarded = [
         sys.argv[0],
         "--no-browser",
@@ -412,8 +407,6 @@ def _run_with_gui(args, rest):
         str(args.port),
         "--host",
         args.host,
-        "--save-dir",
-        initial_save_dir,
     ]
     if args.pi_ip:
         forwarded += ["-p", args.pi_ip]
@@ -861,62 +854,6 @@ def _run_with_gui(args, rest):
         root.after(250, poll_demo_stats)
 
     poll_demo_stats()
-
-    # --- Save folder sub-section ---
-    ttk.Separator(advanced_frame, orient="horizontal").pack(fill="x", pady=(14, 10))
-    ttk.Label(advanced_frame, text="Save plots", style="Section.TLabel").pack(
-        anchor="w"
-    )
-    ttk.Label(
-        advanced_frame,
-        text="Folder where \"Save Plot\" writes .parquet files.",
-        style="Help.TLabel",
-    ).pack(anchor="w", pady=(2, 6))
-
-    save_row = ttk.Frame(advanced_frame)
-    save_row.pack(fill="x")
-    save_dir_var = tk.StringVar(value=initial_save_dir)
-    save_dir_entry = ttk.Entry(save_row, textvariable=save_dir_var)
-    save_dir_entry.pack(side="left", fill="x", expand=True)
-
-    def _apply_save_dir(new_dir):
-        if not new_dir:
-            return
-        new_dir = os.path.abspath(new_dir)
-        try:
-            os.makedirs(new_dir, exist_ok=True)
-        except Exception as exc:  # noqa: BLE001
-            _log(f"could not create save dir {new_dir}: {exc}")
-            demo_status_var.set(f"save dir error: {exc}")
-            return
-        settings["save_dir"] = new_dir
-        _save_settings(settings)
-        try:
-            sb.PLOT_SAVE_PATH = new_dir  # noqa: SLF001 — intentional
-            print(f"save dir changed to {new_dir}")
-        except Exception as exc:  # noqa: BLE001
-            _log(f"failed to retarget save dir on server: {exc}")
-
-    def _browse_save_dir():
-        from tkinter import filedialog
-
-        current = save_dir_var.get() or _exe_dir()
-        chosen = filedialog.askdirectory(
-            initialdir=current, title="Choose where to save plots"
-        )
-        if chosen:
-            save_dir_var.set(chosen)
-            _apply_save_dir(chosen)
-
-    ttk.Button(save_row, text="Browse\u2026", command=_browse_save_dir).pack(
-        side="left", padx=(6, 0)
-    )
-
-    def _on_save_dir_commit(_event=None):
-        _apply_save_dir(save_dir_var.get())
-
-    save_dir_entry.bind("<Return>", _on_save_dir_commit)
-    save_dir_entry.bind("<FocusOut>", _on_save_dir_commit)
 
     # --- Log sub-section (further collapsable inside advanced) ---
     ttk.Separator(advanced_frame, orient="horizontal").pack(fill="x", pady=(14, 10))

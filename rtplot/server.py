@@ -7,7 +7,6 @@ import pyqtgraph as pg
 
 # Common imports
 import numpy as np
-import pandas as pd
 import os
 import time
 
@@ -17,9 +16,6 @@ from time import perf_counter
 # Import argparse to handle different configurations
 # of the plotter
 import argparse
-
-# Import date_time to save timestamps
-import datetime
 
 ############################
 # Command Line Arguments #
@@ -80,28 +76,6 @@ parser.add_argument(
     action="store",
     type=int,
     default=1,
-)
-
-# Add argument to change the save directory
-parser.add_argument(
-    "-sd",
-    "--save-dir",
-    help="Directory to save the data to. Default is to save in \
-    the current directory",
-    action="store",
-    type=str,
-    default=os.getcwd(),
-)
-
-# Add argument to change the save name
-parser.add_argument(
-    "-sn",
-    "--save-name",
-    help="Name of the file to save the data to. Default is to save \
-    the data to the current directory",
-    action="store",
-    type=str,
-    default=None,
 )
 
 # Make the number of lines that the server plots at the same time be adaptable
@@ -188,20 +162,6 @@ SKIP_PLOT_DATAPOINTS = args.skip
 # Determine if we want to adapt the number of skipped data points
 ADAPT_SKIP_PLOT_DATAPOINTS = args.adaptable
 
-# Define the save directory
-PLOT_SAVE_PATH = args.save_dir
-if PLOT_SAVE_PATH is not None:
-    # Make it absolute path
-    PLOT_SAVE_PATH = os.path.abspath(PLOT_SAVE_PATH)
-    # If the save directory doesn't exist, create it
-    if not os.path.exists(PLOT_SAVE_PATH):
-        os.makedirs(PLOT_SAVE_PATH)
-print(f"Plots will be saved in: {PLOT_SAVE_PATH}")
-
-
-# Define the save name
-PLOT_SAVE_NAME = args.save_name
-
 ###################
 # ZMQ Networking #
 ##################
@@ -266,73 +226,6 @@ traces_per_plot = None
 trace_labels = None
 non_plot_labels = None
 
-# Create button callback method
-def save_current_plot(log_name=None):
-    """
-    Save the plot locally
-
-    Keywork arguments
-    log_name -- Name of the file that will be saved. If left None, the current
-            time stamp will be used
-    """
-
-    # Set which trace goes in which plot on the last element of the column
-    num_subplots = 0
-    trace_names = []
-    for i, (trace_name, subplot_index) in enumerate(trace_labels):
-        # Add subplot index to last column
-        local_storage_buffer[i, li] = subplot_index
-        # Get the number of subplots
-        num_subplots = max(subplot_index, num_subplots)
-        # Add trace name
-        trace_names.append(trace_name)
-    
-    # Set the non-plot labels to have a index of -1
-    local_storage_buffer[
-        local_storage_buffer_num_trace:local_storage_buffer_num_trace+num_non_plot_traces, 
-        li] = -1
-
-    # Assign a new subplot for time
-    num_traces = len(trace_labels)
-    trace_names.append("Time(s)")
-    local_storage_buffer[num_traces, li] = num_subplots + 1
-
-    # Get the timestamp for the plot name
-    timestamp = str(datetime.datetime.now())
-    # Remove colons from timestamp for windows file name compatibility
-    # Remove spaces for underscores so it looks nicer
-    timestamp = timestamp.replace(" ", "_").replace(":", "-")
-
-    #Set the log name if it is not provided
-    if log_name is None or log_name is False:
-        if PLOT_SAVE_NAME is not None:
-            log_name = PLOT_SAVE_NAME + "_"
-        else:
-            # Set the plot name as the current time
-            log_name = 'rtplot_' 
-    
-    #Add the timestamp to the log name
-    log_name += timestamp
-
-    #Add to the save path for the datafiles
-    total_name = os.path.join(
-        PLOT_SAVE_PATH, log_name + ".parquet"
-    )
-    
-    # Create the dataframe object so that we can add info about the subplot
-    #  names
-    df = pd.DataFrame(
-        local_storage_buffer[
-            :local_storage_buffer_num_trace + len(non_plot_labels),
-            num_datapoints_in_plot : li + 1
-        ].T,
-        columns=trace_names + non_plot_labels,
-    )
-    df.to_parquet(total_name)
-
-    # Output text confirming we saved
-    print(f"Saved the plot as {total_name}")
-
 ###########################
 # PyQTgraph Configuration #
 ###########################
@@ -353,18 +246,11 @@ pg.setConfigOption("foreground", "k")
 # Define the window object for the plot
 win = pg.GraphicsLayoutWidget(title=WINDOW_TITLE, show=False)
 
-# Create button to save plots
-save_button = QtWidgets.QPushButton("Save Plot")
-
-# Attach Callback
-save_button.clicked.connect(save_current_plot)
-
 
 # Create the GUI
 window = QtWidgets.QWidget()
 hbox = QtWidgets.QVBoxLayout()
 hbox.addWidget(win)
-hbox.addWidget(save_button)
 window.setLayout(hbox)
 window.show()
 
@@ -835,10 +721,14 @@ while True:
             data_between_plots_refresh = 0
 
     elif category == SAVE_PLOT:
-        #Get the log name
-        log_name = socket.recv_string()
-        #Save the plot with the log name
-        save_current_plot(log_name)
+        # Parquet save was removed in rtplot 0.3 — the feature was
+        # rarely used and tied rtplot to pandas + pyarrow. Drain the
+        # follow-up string frame so the socket stays in sync with any
+        # pre-0.3 clients still sending save requests.
+        try:
+            socket.recv_string()
+        except Exception:
+            pass
 
     elif category == NOT_RECEIVED_DATA:
 

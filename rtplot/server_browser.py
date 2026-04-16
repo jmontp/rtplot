@@ -38,14 +38,11 @@ except ImportError as _exc:
     import sys
     _missing = getattr(_exc, "name", None) or "aiohttp"
     sys.stderr.write(
-        "\n[rtplot] Cannot import '{m}'. The browser server requires the\n"
-        "'browser' extra (aiohttp, plus pandas + pyarrow for saving plots).\n"
+        "\n[rtplot] Cannot import '{m}'. The browser server needs the\n"
+        "'browser' extra (just aiohttp these days).\n"
         "\n"
         "Install it with:\n"
         "    pip install 'better-rtplot[browser]'\n"
-        "\n"
-        "If you only need the Qt-based server, run 'python -m rtplot.server'\n"
-        "instead (that one uses pyqtgraph + PySide6 from the 'server' extra).\n"
         "\n".format(m=_missing)
     )
     sys.exit(1)
@@ -90,24 +87,6 @@ parser.add_argument(
     action="store",
     type=int,
     default=1,
-)
-
-parser.add_argument(
-    "-sd",
-    "--save-dir",
-    help="Directory to save the data to. Default is the current directory.",
-    action="store",
-    type=str,
-    default=os.getcwd(),
-)
-
-parser.add_argument(
-    "-sn",
-    "--save-name",
-    help="Optional prefix for saved files.",
-    action="store",
-    type=str,
-    default=None,
 )
 
 parser.add_argument(
@@ -167,13 +146,6 @@ DEBUG_TEXT_ENABLED = args.debug
 SKIP_PLOT_DATAPOINTS = args.skip
 ADAPT_SKIP_PLOT_DATAPOINTS = args.adaptable
 
-PLOT_SAVE_PATH = os.path.abspath(args.save_dir)
-if not os.path.exists(PLOT_SAVE_PATH):
-    os.makedirs(PLOT_SAVE_PATH)
-print(f"Plots will be saved in: {PLOT_SAVE_PATH}")
-
-PLOT_SAVE_NAME = args.save_name
-
 ###############################
 # Local storage configuration #
 ###############################
@@ -187,7 +159,7 @@ local_storage_buffer = np.zeros((INITIAL_NUM_TRACES, MAX_LOCAL_STORAGE))
 # Binary message format pushed to browsers:
 #   uint8  msg_type   (0 = snapshot, 1 = delta)
 #   uint8  status     (0 = green,    1 = red)
-#   uint8  non_plot   (count of non-plot traces, just for the header)
+#   uint8  reserved   (was non-plot trace count, kept for wire compat)
 #   uint8  pad
 #   uint32 num_traces
 #   uint32 num_samples
@@ -198,17 +170,14 @@ HEADER_SIZE = struct.calcsize(HEADER_FMT)
 MSG_SNAPSHOT = 0
 MSG_DELTA = 1
 
-# Mutable plot state (mirrors what server.py keeps in module globals).
+# Mutable plot state.
 state = {
     "li": DEFAULT_NUM_DATAPOINTS_IN_PLOT,
     "buffer_bounds": np.array([0, DEFAULT_NUM_DATAPOINTS_IN_PLOT]),
     "num_datapoints_in_plot": DEFAULT_NUM_DATAPOINTS_IN_PLOT,
     "traces_per_plot": [],
     "trace_labels": [],
-    "non_plot_labels": [],
-    "local_storage_buffer_num_trace": 1,
     "num_traces": 0,
-    "num_non_plot_traces": 0,
     "config_dict": None,
     "config_message": None,
     "fps": 0.0,
@@ -232,29 +201,20 @@ state = {
 }
 
 
-def reset_buffer_state(num_datapoints_in_plot, num_traces, num_non_plot_traces):
+def reset_buffer_state(num_datapoints_in_plot, num_traces):
     """Reset the buffer indices when a new plot config arrives."""
     state["num_datapoints_in_plot"] = num_datapoints_in_plot
     state["li"] = num_datapoints_in_plot
     state["buffer_bounds"] = np.array([0, num_datapoints_in_plot])
-    state["local_storage_buffer_num_trace"] = num_traces + 1
     state["num_traces"] = num_traces
-    state["num_non_plot_traces"] = num_non_plot_traces
     state["last_pushed_li"] = num_datapoints_in_plot
-    local_storage_buffer[
-        : num_traces + 1 + num_non_plot_traces, : num_datapoints_in_plot
-    ] = 0
+    local_storage_buffer[:num_traces, : num_datapoints_in_plot] = 0
 
 
 def parse_config(json_config):
-    """Translate a client plot config into the buffer/trace metadata.
-
-    Mirrors the bookkeeping in server.initialize_plot but skips all of the
-    Qt-side widget creation (the browser handles rendering).
-    """
+    """Translate a client plot config into the buffer/trace metadata."""
     traces_per_plot = []
     trace_info = []
-    non_plot_labels = []
     control_rows = []
     slider_values = {}
     layout = []
@@ -262,8 +222,10 @@ def parse_config(json_config):
 
     plot_counter = 0
     for plot_description in json_config.values():
+        # Skip legacy non_plot_labels rows — save-to-parquet is gone,
+        # these have no runtime effect any more, but accept the shape
+        # so old client scripts don't crash.
         if "non_plot_labels" in plot_description:
-            non_plot_labels = plot_description["non_plot_labels"]
             continue
 
         if "controls" in plot_description:
@@ -289,7 +251,6 @@ def parse_config(json_config):
 
     state["traces_per_plot"] = traces_per_plot
     state["trace_labels"] = trace_info
-    state["non_plot_labels"] = non_plot_labels
     state["control_rows"] = control_rows
     # Preserve display values across re-init when the same ids are reused;
     # drop ids that are no longer declared so stale data doesn't linger.
@@ -307,75 +268,10 @@ def parse_config(json_config):
     state["layout"] = layout
 
     num_traces = sum(traces_per_plot)
-    reset_buffer_state(num_datapoints_in_plot, num_traces, len(non_plot_labels))
+    reset_buffer_state(num_datapoints_in_plot, num_traces)
 
     print("Initialized Plot!                 ")
     return num_datapoints_in_plot
-
-
-def save_current_plot(log_name=None):
-    """Persist the current buffer to a Parquet file.
-
-    Identical layout to ``server.save_current_plot`` so saved files are
-    interchangeable between the Qt and browser servers. pandas + pyarrow
-    are optional and may be absent from slim builds (e.g. the Windows
-    exe). In that case we log a clear message and return without
-    raising — the receiver loop must not die because the user clicked
-    Save.
-    """
-    try:
-        import pandas as pd  # local import keeps Parquet deps optional
-    except ImportError as exc:
-        print(
-            "[rtplot] Save Plot unavailable: "
-            f"pandas/pyarrow not installed in this build ({exc})."
-        )
-        return
-
-    li = state["li"]
-    num_datapoints_in_plot = state["num_datapoints_in_plot"]
-    trace_labels = state["trace_labels"]
-    non_plot_labels = state["non_plot_labels"]
-    local_storage_buffer_num_trace = state["local_storage_buffer_num_trace"]
-    num_non_plot_traces = state["num_non_plot_traces"]
-
-    num_subplots = 0
-    trace_names = []
-    for i, (trace_name, subplot_index) in enumerate(trace_labels):
-        local_storage_buffer[i, li] = subplot_index
-        num_subplots = max(subplot_index, num_subplots)
-        trace_names.append(trace_name)
-
-    local_storage_buffer[
-        local_storage_buffer_num_trace : local_storage_buffer_num_trace
-        + num_non_plot_traces,
-        li,
-    ] = -1
-
-    num_traces = len(trace_labels)
-    trace_names.append("Time(s)")
-    local_storage_buffer[num_traces, li] = num_subplots + 1
-
-    timestamp = str(datetime.datetime.now()).replace(" ", "_").replace(":", "-")
-
-    if log_name is None or log_name is False or log_name == "":
-        if PLOT_SAVE_NAME is not None:
-            log_name = PLOT_SAVE_NAME + "_"
-        else:
-            log_name = "rtplot_"
-
-    log_name += timestamp
-    total_name = os.path.join(PLOT_SAVE_PATH, log_name + ".parquet")
-
-    df = pd.DataFrame(
-        local_storage_buffer[
-            : local_storage_buffer_num_trace + len(non_plot_labels),
-            num_datapoints_in_plot : li + 1,
-        ].T,
-        columns=trace_names + non_plot_labels,
-    )
-    df.to_parquet(total_name)
-    print(f"Saved the plot as {total_name}")
 
 
 ###############################
@@ -421,10 +317,9 @@ def make_data_message(msg_type, lo, hi):
     if n_samples <= 0 or num_traces <= 0:
         return None
     status_int = 1 if state["title_color"] == "red" else 0
-    non_plot = state["num_non_plot_traces"]
     fps = float(state["fps"]) if state["fps"] else 0.0
     header = struct.pack(
-        HEADER_FMT, msg_type, status_int, non_plot, num_traces, n_samples, fps
+        HEADER_FMT, msg_type, status_int, 0, num_traces, n_samples, fps
     )
     payload = np.ascontiguousarray(
         local_storage_buffer[:num_traces, lo:hi], dtype=np.float32
@@ -440,10 +335,11 @@ def make_snapshot_message():
 def build_config_message(config_dict):
     """Convert the client-supplied OrderedDict into a JSON-friendly message."""
     plots = []
-    non_plot_labels = []
     for key, plot_description in config_dict.items():
+        # non_plot_labels used to feed the old Parquet save; it has no
+        # runtime effect any more but we still accept the key so old
+        # client scripts don't crash.
         if "non_plot_labels" in plot_description:
-            non_plot_labels = plot_description["non_plot_labels"]
             continue
         if "controls" in plot_description:
             continue
@@ -465,7 +361,6 @@ def build_config_message(config_dict):
     return {
         "type": "config",
         "plots": plots,
-        "non_plot_labels": non_plot_labels,
         "controls": state["control_rows"],
         "layout": state["layout"],
         "slider_values": dict(state["slider_values"]),
@@ -652,8 +547,6 @@ async def zmq_receiver():
             num_values = arr.shape[1]
             li = state["li"]
             num_traces = state["num_traces"]
-            num_non_plot_traces = state["num_non_plot_traces"]
-            local_storage_buffer_num_trace = state["local_storage_buffer_num_trace"]
 
             local_storage_buffer[:num_traces, li : li + num_values] = arr[
                 :num_traces, :
@@ -670,24 +563,6 @@ async def zmq_receiver():
                     fps = fps * (1 - s) + (1.0 / dt) * s
                 state["fps"] = fps
 
-            curr_timestamp = now - first_time
-            local_storage_buffer[
-                local_storage_buffer_num_trace - 1, li : li + num_values
-            ] = curr_timestamp
-
-            if num_non_plot_traces > 0 and arr.shape[0] >= (
-                local_storage_buffer_num_trace + num_non_plot_traces
-            ):
-                local_storage_buffer[
-                    local_storage_buffer_num_trace : local_storage_buffer_num_trace
-                    + num_non_plot_traces,
-                    li : li + num_values,
-                ] = arr[
-                    local_storage_buffer_num_trace : local_storage_buffer_num_trace
-                    + num_non_plot_traces,
-                    :,
-                ]
-
             state["li"] = li + num_values
             state["buffer_bounds"][0] += num_values
             state["buffer_bounds"][1] += num_values
@@ -698,11 +573,14 @@ async def zmq_receiver():
             state["title_color"] = "green"
 
         elif category == SAVE_PLOT:
-            log_name = await zmq_socket.recv_string()
+            # Category "3" used to save the buffer to a Parquet file; the
+            # feature has been removed. We still drain the follow-up
+            # string frame that old clients send so the socket stays in
+            # sync, but otherwise ignore the request.
             try:
-                save_current_plot(log_name)
-            except Exception as exc:  # noqa: BLE001
-                print(f"[rtplot] save_current_plot failed: {exc}")
+                await zmq_socket.recv_string()
+            except Exception:  # noqa: BLE001
+                pass
 
         elif category == RECEIVED_DISPLAY:
             payload = await zmq_socket.recv_json()
@@ -948,7 +826,6 @@ INDEX_HTML = """<!doctype html>
   <div id=\"header\">
     <h1>rtplot</h1>
     <div id=\"status\" class=\"green\">Rate: -- Hz</div>
-    <button id=\"save-btn\" class=\"btn\">Save Plot</button>
     <div id=\"zmq-mode\">ZMQ: --</div>
     <input id=\"ip-input\" type=\"text\" placeholder=\"host[:port]\" />
     <button id=\"connect-btn\" class=\"btn\">Connect</button>
@@ -1006,7 +883,6 @@ INDEX_HTML = """<!doctype html>
       const plotsDiv = document.getElementById('plots');
       const statusDiv = document.getElementById('status');
       const wsStatus = document.getElementById('ws-status');
-      const saveBtn = document.getElementById('save-btn');
       const ipInput = document.getElementById('ip-input');
       const connectBtn = document.getElementById('connect-btn');
       const bindBtn = document.getElementById('bind-btn');
@@ -1779,12 +1655,6 @@ INDEX_HTML = """<!doctype html>
         };
       }
 
-      saveBtn.addEventListener('click', () => {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: 'save' }));
-        }
-      });
-
       connectBtn.addEventListener('click', () => {
         // Already in connect mode — clicking again is a no-op unless
         // the user has typed a DIFFERENT IP into the input.
@@ -2099,12 +1969,7 @@ async def handle_ws(request):
                 except json.JSONDecodeError:
                     continue
                 ptype = payload.get("type")
-                if ptype == "save":
-                    try:
-                        save_current_plot(payload.get("name"))
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[rtplot] save_current_plot failed: {exc}")
-                elif ptype == "configure_ip":
+                if ptype == "configure_ip":
                     ip = payload.get("ip")
                     if ip:
                         try:

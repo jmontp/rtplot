@@ -2,8 +2,6 @@ import zmq
 import numpy as np
 import time
 from collections import OrderedDict, namedtuple
-import csv
-from typing import List
 
 ###################
 # ZMQ Networking #
@@ -73,19 +71,15 @@ else:
 
 
 ############################
-# Local plot save config #
-###########################
-local_log_file = None
-csv_writer = None
-
-############################
 # PyQTgraph Configuration #
 ###########################
 
-#Create definitions for categories
+#Create definitions for categories. "3" used to be SAVE_PLOT (parquet
+#output); that feature has been removed. The numeric value is reserved
+#so the server still recognizes it and quietly ignores messages sent
+#by any pre-0.3 client still in the wild.
 SENDING_PLOT_UPDATE = "0"
 SENDING_DATA = "1"
-SAVE_PLOT = "3"
 SENDING_DISPLAY = "4"
 
 #Lightweight result type returned by poll_controls()
@@ -223,36 +217,15 @@ def configure_ip(ip = None, known_pi_address = False, new_bind_address = None):
     #Sleep so that the connection can be established
     time.sleep(1)
 
-def create_local_log(plot_desc_dict:List[dict], log_name:str=None):
-    """Create a current log file based on the data that is sent"""
-    global local_log_file
-    global csv_writer
-    
-    #If we have a local log file, then delete it
-    if local_log_file is not None:
-        local_log_file.close()
-        local_log_file = None
-
-    # Create a new log file with a csv writter object which uses the log_name
-    # argument in conjunction with the timestamp to create a unique log file
-    local_log_file = open(f"{log_name}_{time.time()}.csv", 'w', newline='')
-    csv_writer = csv.writer(local_log_file, delimiter=',',
-                             quotechar='"', quoting=csv.QUOTE_MINIMAL)
-
-    # Add the header to the csv file based on the plot description
-    csv_writer.writerow(["Time"] + [name for plot in plot_desc_dict.values() for name in plot["names"]])
-    
-
-
 def send_array(A, flags=0, copy=True, track=False):
     """send a numpy array with metadata
     Inputs
     ------
     A: (subplots,dim) np array to transmit
-        subplots - the amount of subplots that are 
+        subplots - the amount of subplots that are
                    defined in the current plot
         dim - the amount of data that you want to plot.
-              This is not fixed 
+              This is not fixed
     """
     #If you get a float value, convert it to a numpy array
     if(isinstance(A,float) or isinstance(A,list)):
@@ -265,30 +238,28 @@ def send_array(A, flags=0, copy=True, track=False):
         dtype = str(A.dtype),
         shape = A.shape,
     )
-    
+
     #Send category
     socket.send_string(SENDING_DATA)
     #Send json description
     socket.send_json(md, flags | zmq.SNDMORE)
     #Send array
     socket.send(A, flags, copy=copy, track=track)
-    
-    #If we have a local log file, then save the data
-    if local_log_file is not None:
-        csv_writer.writerow([time.time()] + A.flatten().tolist())
 
 
-def initialize_plots(plot_descriptions=1, log_name=None):
-    """Send a json description of desired plot
+def initialize_plots(plot_descriptions=1):
+    """Send a json description of desired plot.
+
     Inputs
     ------
-    plot_description: list of names or list of plot descriptions dictionaries
-        list of names - the names of the plots that you want to create
-        list of plot descriptions - the dictionary of the plot descriptions
-    log_name: string, name of the file that will be stored locally
+    plot_description:
+        - int N: one plot with N anonymous traces
+        - str: one plot with a single named trace
+        - dict: one plot with full styling
+        - list of str: one plot, one trace per name
+        - list of list of str: one plot per sublist
+        - list of dict: multiple plots, each with full styling
     """
-    
-    global local_log_file
     global plot_desc_dict
 
     #Process int inputs
@@ -300,7 +271,7 @@ def initialize_plots(plot_descriptions=1, log_name=None):
     elif isinstance(plot_descriptions, str):
         plot_desc_dict = OrderedDict()
         plot_desc_dict["plot0"] = {"names":[plot_descriptions]}
-    
+
     #Process dictionary inputs
     elif isinstance(plot_descriptions, dict):
         plot_desc_dict = OrderedDict()
@@ -319,58 +290,22 @@ def initialize_plots(plot_descriptions=1, log_name=None):
             plot_desc_dict = OrderedDict()
             for i,plot_desc in enumerate(plot_descriptions):
                 plot_desc_dict["plot{}".format(i)] = {"names":plot_desc}
-        
+
         #Process list of dics
         elif isinstance(plot_descriptions[0],dict):
             plot_desc_dict = OrderedDict()
             for i,plot_desc in enumerate(plot_descriptions):
                 plot_desc_dict["plot{}".format(i)] = plot_desc
-    
+
     #Throw error
     else:
         raise TypeError("Incorrect usage of initialize_plots, verify github for usage")
-    
+
     #Send the category
     socket.send_string(SENDING_PLOT_UPDATE)
 
     #Send the description
     socket.send_json(plot_desc_dict)
-
-    #If we have a log name, then open a local CSV alongside the plot
-    # configuration. create_local_log needs both pieces: the plot
-    # description (so the header row has the right column names) and
-    # the log_name (used to build the filename).
-    if log_name is not None:
-        create_local_log(plot_desc_dict, log_name=log_name)
-
-
-def save_plot(log_name):
-    """
-    Tell the server to store the data that has been sent for the latest
-    plot configuration.
-
-    Keyword Arguments
-    log_name -- string, name of the file that will be stored
-
-    If this client was also writing a local CSV log (see
-    ``initialize_plots(..., log_name=...)``), the CSV is flushed to
-    disk so the rows recorded so far are persisted alongside the
-    server-side save.
-    """
-    # Indicate that we will send a plot save requset
-    socket.send_string(SAVE_PLOT)
-
-    # Send the save plot name
-    socket.send_string(log_name)
-
-    # Flush the local CSV log if there is one. The common case (no
-    # client-side CSV) leaves local_log_file as None; only flush when
-    # it was actually opened by create_local_log().
-    if local_log_file is not None:
-        try:
-            local_log_file.flush()
-        except Exception as exc:  # noqa: BLE001
-            print(f"rtplot.client: failed to flush local log: {exc}")
 
 
 def set_display(display_id: str, value):
