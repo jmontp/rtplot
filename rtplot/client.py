@@ -253,13 +253,6 @@ def local_plot():
     local_address = "tcp://127.0.0.1:5555"
     configure_ip(ip = local_address)
 
-def plot_to_neurobionics_tv():
-    """Send data to a plot in the same computer"""
-
-    tv_computer_address = "tcp://141.212.77.23:5555"
-    configure_ip(ip = tv_computer_address)
-    
-
 def configure_port(new_port:int):
     """Rebind the local publisher on ``new_port`` (bind mode only).
 

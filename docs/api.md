@@ -27,7 +27,6 @@ All from `rtplot.client`:
 | Function | Purpose |
 |---|---|
 | `local_plot()` | Point at `127.0.0.1:5555`. Shorthand for `configure_ip("127.0.0.1")`. |
-| `plot_to_neurobionics_tv()` | Point at the lab wall display (`141.212.77.23:5555`). |
 | `configure_ip(ip)` | Connect to `ip`, `host:port`, or `tcp://host:port`. Also connects the control socket to `port+1`. |
 | `configure_port(port)` | Rebind the publisher locally (bind-mode senders). |
 | `initialize_plots(desc)` | Declare layout (see [Plot configuration](#plot-configuration)). |
