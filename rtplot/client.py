@@ -105,11 +105,19 @@ def plot_to_neurobionics_tv():
     
 
 def configure_port(new_port:int):
-    """Change the port
+    """Rebind the local publisher on ``new_port`` (bind mode only).
+
+    This only affects the *bind* path — it re-opens the client's PUB
+    socket on a new local port and expects the server to connect
+    inbound. If you're in the usual "client connects to a remote
+    server" mode, use ``configure_ip(host_or_ip, ...)`` with the
+    ``host:port`` form instead; ``configure_port`` has no effect on
+    the connect target.
 
     Keyword Arguments:
-    new_port -- int four digit number that represents the port
-
+    new_port -- int, the local port to bind the data PUB socket on.
+                The control return channel automatically uses the next
+                port (``new_port + 1``).
     """
     #Create the new bind address
     new_bind_address = f"tcp://*:{new_port}"
@@ -328,19 +336,26 @@ def initialize_plots(plot_descriptions=1, log_name=None):
     #Send the description
     socket.send_json(plot_desc_dict)
 
-    #If we have a log name, then save the log
+    #If we have a log name, then open a local CSV alongside the plot
+    # configuration. create_local_log needs both pieces: the plot
+    # description (so the header row has the right column names) and
+    # the log_name (used to build the filename).
     if log_name is not None:
-        create_local_log(log_name)
+        create_local_log(plot_desc_dict, log_name=log_name)
 
 
 def save_plot(log_name):
     """
     Tell the server to store the data that has been sent for the latest
-    plot configuration
+    plot configuration.
 
     Keyword Arguments
     log_name -- string, name of the file that will be stored
 
+    If this client was also writing a local CSV log (see
+    ``initialize_plots(..., log_name=...)``), the CSV is flushed to
+    disk so the rows recorded so far are persisted alongside the
+    server-side save.
     """
     # Indicate that we will send a plot save requset
     socket.send_string(SAVE_PLOT)
@@ -348,8 +363,14 @@ def save_plot(log_name):
     # Send the save plot name
     socket.send_string(log_name)
 
-    # Flush the file to ensure that all data is written
-    local_log_file.flush()
+    # Flush the local CSV log if there is one. The common case (no
+    # client-side CSV) leaves local_log_file as None; only flush when
+    # it was actually opened by create_local_log().
+    if local_log_file is not None:
+        try:
+            local_log_file.flush()
+        except Exception as exc:  # noqa: BLE001
+            print(f"rtplot.client: failed to flush local log: {exc}")
 
 
 def set_display(display_id: str, value):

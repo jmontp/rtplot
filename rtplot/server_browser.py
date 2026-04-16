@@ -1136,7 +1136,7 @@ INDEX_HTML = """<!doctype html>
       let totalTraces = 0;
       let socket = null;
       let pendingFrame = false;
-      let lastStatus = { fps: 0, statusByte: 0, nonPlot: 0, dirty: true };
+      let lastStatus = { fps: 0, statusByte: 0, nonPlot: 0, peers: 0, dirty: true };
       const controlElements = { displays: {}, displayFormats: {}, displayKinds: {}, sliders: {} };
 
       function sendCtrl(msg) {
@@ -1622,8 +1622,11 @@ INDEX_HTML = """<!doctype html>
           p.uplot.setData(data);
         });
         if (lastStatus.dirty) {
+          const peers = lastStatus.peers;
+          const peerText = peers === 1 ? '1 browser' : `${peers} browsers`;
           const txt =
             `Data ${lastStatus.fps.toFixed(0)} Hz  ·  Render ${renderFps.toFixed(0)} Hz` +
+            `  ·  ${peerText}` +
             (lastStatus.nonPlot > 0 ? `  ·  non-plot ${lastStatus.nonPlot}` : '');
           statusDiv.textContent = txt;
           statusDiv.className = lastStatus.statusByte === 1 ? 'red' : 'green';
@@ -1759,6 +1762,16 @@ INDEX_HTML = """<!doctype html>
               }
             } else if (msg.type === 'display_update') {
               applyDisplayValues(msg.values);
+            } else if (msg.type === 'peer_count') {
+              // Server broadcasts this whenever a browser connects or
+              // disconnects so every tab's status bar shows the same
+              // current count without needing to poll.
+              const n = Number(msg.count) || 0;
+              if (lastStatus.peers !== n) {
+                lastStatus.peers = n;
+                lastStatus.dirty = true;
+                scheduleRender();
+              }
             }
           } else {
             applyBinary(ev.data);
@@ -2040,10 +2053,21 @@ async def handle_snapshot(request):
     )
 
 
+async def broadcast_peer_count():
+    """Tell every connected browser how many peers are currently connected.
+
+    Called whenever a browser joins or leaves so every tab's status bar
+    stays in sync without polling.
+    """
+    await broadcast_text({"type": "peer_count", "count": len(ws_clients)})
+
+
 async def handle_ws(request):
     ws = web.WebSocketResponse(max_msg_size=0)
     await ws.prepare(request)
     ws_clients.add(ws)
+    # Let every browser (including this fresh one) see the new peer count.
+    await broadcast_peer_count()
     try:
         await ws.send_str(
             json.dumps(
@@ -2111,6 +2135,8 @@ async def handle_ws(request):
                 break
     finally:
         ws_clients.discard(ws)
+        # Update everyone else's count now that this client has gone.
+        await broadcast_peer_count()
     return ws
 
 

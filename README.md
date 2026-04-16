@@ -1,5 +1,3 @@
-![Logo of the project](https://github.com/jmontp/rtplot/blob/master/.images/signature-stationery.png)
-
 # rtplot — real-time plotting over ZMQ
 
 **rtplot** lets a Python script push live data to a plot window — locally, or
@@ -25,19 +23,17 @@ preview what the plot looks like without running anything.
 - [Your first plot, step by step](#your-first-plot-step-by-step)
 - [Highlights](#highlights)
 - [Install](#install)
-- [60-second quickstart](#60-second-quickstart)
 - [Interactive controls](#interactive-controls)
-  - [Reading controls from Python](#reading-controls-from-python)
-  - [Pushing values into displays](#pushing-values-into-displays)
-  - [Element reference](#element-reference)
 - [Plot configuration](#plot-configuration)
 - [Sending data](#sending-data)
 - [Saving data](#saving-data)
+- [Browser UI features](#browser-ui-features)
 - [Networking modes](#networking-modes)
 - [Viewing the plot from another device](#viewing-the-plot-from-another-device)
 - [Performance tuning](#performance-tuning)
 - [CLI reference](#cli-reference)
-- [Examples](#examples)
+- [Client API reference](#client-api-reference)
+- [Examples gallery](#examples-gallery)
 
 ---
 
@@ -46,9 +42,10 @@ preview what the plot looks like without running anything.
 rtplot has two pieces that run independently:
 
 - The **server** is a small program that shows plots in a web browser.
-  You start it once (or download it as a standalone Windows/Linux/macOS
-  exe from the [Releases page](https://github.com/jmontp/rtplot/releases))
-  and it sits there waiting for data.
+  You start it once (or download it as a standalone Windows / Linux /
+  macOS binary from the
+  [Releases page](https://github.com/jmontp/rtplot/releases)) and it
+  sits there waiting for data.
 - The **client** is a tiny Python library you import from your own
   script. Calling `client.send_array(value)` in your loop makes a new
   data point appear on the server's plot.
@@ -120,7 +117,7 @@ now drawing itself in real time.
 That's everything you need to get started. The rest of this README is
 a reference for options, styling, interactive controls, and remote
 networking, plus a [gallery of example scripts](examples/) you can
-open in a browser as static snapshots before running them yourself.
+preview as static snapshots before running them yourself.
 
 ---
 
@@ -136,31 +133,37 @@ open in a browser as static snapshots before running them yourself.
   works over SSH port forwarding out of the box.
 - **Remote-friendly.** Either the sender or the plot host can bind —
   pick whichever fits your network. Works across LAN, WSL, and SSH
-  tunnels.
+  tunnels. The browser UI has live Bind / Connect buttons so you can
+  retarget without restarting the server.
 - **Plot config lives with the data.** The sender declares the plot
   layout, so a Pi running your experiment owns the look of its own
   dashboards.
-- **Interactive controls.** Declare buttons, sliders, dials,
-  numeric/text displays in the same `initialize_plots` call. Poll from
-  your tight loop; no threads, no callbacks.
+- **Interactive controls.** Declare buttons, sliders, dials, and
+  numeric / text displays in the same `initialize_plots` call. Poll
+  from your tight loop; no threads, no callbacks.
 - **Save to Parquet** with a single button click or `client.save_plot()`
   call.
+- **Static HTML snapshots.** `client.save_snapshot("out.html")` writes
+  a self-contained HTML file with the current trace data and uPlot
+  inlined. Perfect for commit-to-repo gallery previews or emailing a
+  "here's what I saw" artifact.
 
 ---
 
 ## Install
 
-Install rtplot with the server bundle — this is the normal path and
-gets you everything:
+### Normal path — pip
+
+Install rtplot with the server bundle:
 
 ```bash
 pip install "better-rtplot[browser]"
 ```
 
-This pulls `aiohttp` (for serving the plot UI) plus `pandas` + `pyarrow`
-(for saving runs to Parquet). If you only need the sender side — your
-script pushes data to someone else's plot host and you don't run a
-server locally — you can install the client-only minimum instead:
+This pulls `aiohttp` (for serving the plot UI) plus `pandas` +
+`pyarrow` (for saving runs to Parquet). If you only need the sender
+side — your script pushes data to someone else's plot host and you
+don't run a server locally — you can install the client-only minimum:
 
 ```bash
 pip install better-rtplot
@@ -172,36 +175,27 @@ clear error telling you to add the `[browser]` extra.
 WSL users: nothing extra needed. The plot window is served by HTTP, so
 just open the URL rtplot prints in your Windows browser.
 
----
+### No-Python path — prebuilt binary
 
-## 60-second quickstart
+Every tagged release on GitHub ships a standalone `rtplot-server`
+binary built for **windows-x64**, **linux-x86_64**, and
+**macos-arm64**. Download from the
+[Releases page](https://github.com/jmontp/rtplot/releases) and run
+directly — no Python install needed on that machine.
 
-**Terminal 1 — start the plot server:**
+On Windows the binary opens a small Tk status window
+(`rtplot/server_browser_gui.py`) that shows the listening URL, ZMQ
+status, a configurable save directory, an optional demo sender for
+smoke-testing end-to-end connectivity, and a collapsable log panel.
+Senders still need Python + `pip install better-rtplot`; the binary
+only replaces the *server* side, which is the part most people don't
+want to set up on a plot-viewing machine.
 
-```bash
-python -m rtplot.server_browser
-```
-
-It prints a URL like `http://localhost:8050` — open that in your
-browser. The page stays blank until a client sends a plot config.
-
-**Terminal 2 — send data:**
-
-```python
-from rtplot import client
-import numpy as np, time
-
-client.local_plot()                     # send to the server on 127.0.0.1
-client.initialize_plots(["sin", "cos"]) # one plot with two named traces
-
-for i in range(10000):
-    t = i * 0.01
-    client.send_array([np.sin(t), np.cos(t)])
-    time.sleep(0.01)
-```
-
-That's it. The browser tab you opened will start drawing the two
-traces in real time.
+| Platform | Asset name |
+|---|---|
+| Windows | `rtplot-server-<version>-windows-x64.exe` |
+| Linux | `rtplot-server-<version>-linux-x86_64.tar.gz` |
+| macOS (Apple Silicon) | `rtplot-server-<version>-macos-arm64.tar.gz` |
 
 ---
 
@@ -288,19 +282,28 @@ server and rebroadcast to every connected browser at ~30 Hz.
 
 | Type | Purpose | Notable fields |
 |---|---|---|
-| `button` | Fires a discrete event when clicked | `id`, `label` |
-| `slider` | Scalar input via horizontal range | `id`, `label`, `min`, `max`, `value`, `step`, `format` |
-| `dial` | Scalar input via rotational drag | same as slider, plus `sensitivity` (full turns per range sweep; default `1.0`) |
-| `display` | Read-only numeric readout | `id`, `label`, `format` |
-| `text` | Read-only text field (prompts, status) | `id`, `label`, `value` |
+| `button` | Fires a discrete event when clicked | `id`, `label`, `height` |
+| `slider` | Scalar input via horizontal range | `id`, `label`, `min`, `max`, `value`, `step`, `format`, `height` |
+| `dial` | Scalar input via vertical drag on a circular indicator | same as slider, plus `sensitivity` (fraction of value range per rotation; default `1.0`) |
+| `display` | Read-only numeric readout | `id`, `label`, `format`, `height` |
+| `text` | Read-only text field (prompts, status) | `id`, `label`, `value`, `height` |
 
 Slider and dial widgets both render as **`[widget] [−] [number input] [+]`**,
 so you can drag, type a value directly, or nudge by `step`. The dial
-accepts "round and round" circular drag — each full rotation walks the
-value through `(max − min) × sensitivity`, so `sensitivity: 0.25` gives
-you four rotations per sweep for fine control.
+uses a vertical pointer drag — drag up to increase — and the
+`sensitivity` field controls how many units of value change one full
+rotation covers. `sensitivity: 1.0` (default) maps one rotation to the
+full `(max − min)` range; `sensitivity: 0.25` needs four rotations to
+sweep the range for finer control.
 
-The `format` field accepts Python-style `{:.Nf}` strings (e.g. `"{:.2f}"`).
+The `format` field accepts Python-style `{:.Nf}` strings (e.g.
+`"{:.2f}"`). The `height` field is an optional multiplier on the
+standard row height (default `1`) — e.g. `"height": 2` gives a dial
+that's twice as tall (and therefore twice as wide), or a button with
+twice the click target.
+
+See [`examples/03_interactive_controls/`](examples/03_interactive_controls/)
+for a runnable walkthrough of the full control palette.
 
 ---
 
@@ -308,10 +311,10 @@ The `format` field accepts Python-style `{:.Nf}` strings (e.g. `"{:.2f}"`).
 
 Each entry in `initialize_plots` is one of:
 
-- an **integer** — `client.initialize_plots(3)` → one plot with 3 anonymous
-  traces
-- a **string** — `client.initialize_plots("torque")` → one plot with one
-  named trace
+- an **integer** — `client.initialize_plots(3)` → one plot with 3
+  anonymous traces
+- a **string** — `client.initialize_plots("torque")` → one plot with
+  one named trace
 - a **list of strings** — one plot, one trace per name
 - a **list of lists of strings** — one plot per sublist
 - a **dict** — one plot, with full styling options (below)
@@ -323,20 +326,21 @@ A styled plot dict accepts any of:
 |---|---|
 | `names` | **Required.** List of trace names. |
 | `colors` | List of per-trace colors. Single letter (`r g b c m y k w`) or any CSS color string. |
-| `line_style` | `"-"` for dashed, `""` (or anything else) for solid, per trace. |
+| `line_style` | Per-trace dash style. `"-"` means dashed; anything else is solid. |
 | `line_width` | Per-trace line width in pixels. |
 | `title` | Plot title. |
 | `xlabel` / `ylabel` | Axis labels. |
 | `yrange` | `[ymin, ymax]` — pins the Y axis and significantly speeds up rendering. |
 | `xrange` | Integer number of samples visible at once (default 200). |
+| `height` | Per-plot height multiplier (default `1.0`). Use `2` for a plot that's twice as tall as the others in the layout. |
 
 Special row entries (not plots themselves):
 
 - `{"controls": [...]}` — a row of interactive controls (see
   [Interactive controls](#interactive-controls))
-- `{"non_plot_labels": ["name1", "name2"]}` — extra scalar names that ride
-  along with `send_array` and get saved into the output Parquet file, but
-  aren't rendered as traces
+- `{"non_plot_labels": ["name1", "name2"]}` — extra scalar names that
+  ride along with `send_array` and get saved into the output Parquet
+  file, but aren't rendered as traces
 
 ---
 
@@ -363,7 +367,7 @@ The server saves every sample it has received since the latest
 
 Trigger a save from either side:
 
-- **Browser UI:** click the **Save Plot** button.
+- **Browser UI:** click the **Save Plot** button in the header.
 - **Python:** `client.save_plot("my_run")`
 
 Control where things get written:
@@ -388,13 +392,63 @@ Send `battery`, `cpu_temp` and `loop_latency` as extra rows after the
 plotted traces in each `send_array` call; they won't be drawn but they
 will land in the Parquet file.
 
+### Static HTML snapshots
+
+```python
+client.save_snapshot("preview.html", animate=True)
+```
+
+Writes a self-contained HTML file with uPlot JS + CSS inlined and the
+current window of trace data embedded. Opens offline in any browser,
+around 65 KB. Control widgets are *not* captured — only the plot
+portion — so the snapshot is the right artifact to commit to a repo as
+a visual regression baseline or to attach to an email. With
+`animate=True` the snapshot embeds a small replay loop so the trace
+keeps scrolling (nicer for gallery previews).
+
+The `server_url` argument defaults to `http://localhost:8050`; set it
+explicitly when snapshotting a remote server or one running on a
+non-default `--port`.
+
+---
+
+## Browser UI features
+
+The browser tab isn't just a passive plot — the header bar and a
+hamburger-menu settings panel give you live control over the server
+without restarting it.
+
+**Header controls**
+
+| Element | What it does |
+|---|---|
+| Status pill | Live data rate + render rate (e.g. `Data 480 Hz · Render 60 Hz`). Turns red when the server marks the stream unhealthy. |
+| **Save Plot** button | Writes a Parquet file of the current buffer to the server's save directory. |
+| `ZMQ …` indicator | Shows whether the server is currently **binding** (`ZMQ bind *:5555`) or **connecting outbound** (`ZMQ → host:port`). |
+| IP input | Type a `host[:port]` to retarget before clicking **Connect**. |
+| **Connect** / **Bind** buttons | Flip the server between *connect-to-a-sender* and *bind-and-wait* modes at runtime. The active mode is highlighted; the other is clickable. |
+| WebSocket status | `connected` / `disconnected, retrying…` — for the browser-to-server link, not the ZMQ link. |
+| **☰** menu button | Opens the Settings panel (below). |
+
+**Settings panel (☰)**
+
+| Setting | Meaning |
+|---|---|
+| UI font scale | 0.7× – 2.0× multiplier on every piece of browser-side text. Good for demos, projectors, and high-DPI screens. |
+| Visible samples per plot | Overrides the declared `xrange` — lets a viewer zoom out or in without touching the sender script. |
+| Max plot refresh rate | Caps repaints at N Hz. The panel reports the monitor's measured refresh rate via `requestAnimationFrame` calibration, so you know the ceiling. Leave blank to use the monitor Hz as the cap. |
+
+All settings are persisted in `localStorage`, so a refresh keeps your
+preferences. The **Reset to defaults** button clears them.
+
 ---
 
 ## Networking modes
 
 rtplot uses ZMQ, so either the sender or the plot host can be the one
 that *binds* a socket. Pick whichever works for your network and
-firewalls.
+firewalls. You can also flip modes from the browser UI's **Bind** /
+**Connect** buttons without restarting the server.
 
 **Mode A — plot host binds, sender connects** *(typical for lab laptops)*
 
@@ -556,12 +610,15 @@ If you start running out of frames, try these, in roughly this order:
    renderer skip autoscaling work and gives the single biggest win.
 2. **Batch your samples.** Pass a 2-D numpy array to `send_array` so N
    samples ship per call.
-3. **Shrink the window.** Fewer pixels to redraw per frame.
-4. **Reduce `line_width`.** Thicker lines cost more to rasterize.
-5. **Use the `-s N` / `--skip N` server flag** to push every Nth sample
+3. **Cap the plot refresh rate** from the browser's ☰ Settings menu.
+   The ring buffers keep accumulating samples; only the repaint rate
+   is throttled.
+4. **Shrink the window.** Fewer pixels to redraw per frame.
+5. **Reduce `line_width`.** Thicker lines cost more to rasterize.
+6. **Use the `-n N` / `--skip N` server flag** to push every Nth sample
    batch to the browser instead of every one. Add `-a` / `--adaptable`
    to let the server tune `N` to your data rate automatically.
-6. **Increase `xrange`.** Counterintuitively, a longer visible history
+7. **Increase `xrange`.** Counterintuitively, a longer visible history
    can be cheaper than a short one because the browser ring-buffers the
    data and only replaces the tail on each push.
 
@@ -573,7 +630,7 @@ If you start running out of frames, try these, in roughly this order:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-p HOST[:PORT]` | (bind) | Connect to a sender at this address instead of binding |
+| `-p HOST[:PORT]` / `--pi_ip` | (bind) | Connect to a sender at this address instead of binding |
 | `--host HOST` | `0.0.0.0` | HTTP bind interface |
 | `--port N` | `8050` | HTTP port |
 | `--no-browser` | off | Don't try to open a browser on startup |
@@ -587,16 +644,52 @@ If you start running out of frames, try these, in roughly this order:
 
 ---
 
-## Examples
+## Client API reference
 
-- [`rtplot/example_code.py`](rtplot/example_code.py) — a walk through
-  every `initialize_plots` signature, plus a controls demo at the bottom.
-- [`rtplot/interactive_test.py`](rtplot/interactive_test.py) — a guided
-  end-to-end test that walks you through clicking buttons, dragging
-  sliders, typing into the number input, using the ± nudge arrows, and
-  spinning the dial. Good for smoke-testing a fresh install.
+Every function below is imported from `rtplot.client`:
 
-  ```bash
-  python -m rtplot.server_browser &
-  python -m rtplot.interactive_test
-  ```
+| Function | Purpose |
+|---|---|
+| `local_plot()` | Point the client at a server on `127.0.0.1:5555`. Shorthand for `configure_ip("127.0.0.1")`. |
+| `plot_to_neurobionics_tv()` | Point at the lab's wall-display host (`141.212.77.23:5555`). |
+| `configure_ip(ip)` | Connect to a server at `ip`, `host:port`, or a full `tcp://host:port` string. Also connects the control return-channel socket to `port+1`. |
+| `configure_port(port)` | Rebind the local publisher to a different port (for senders running in bind mode). |
+| `initialize_plots(desc)` | Declare the plot layout. Accepts int, str, dict, list-of-strings, list-of-lists, or list-of-dicts (see [Plot configuration](#plot-configuration)). |
+| `send_array(A)` | Push one or more samples. Accepts float, list, 1-D numpy array, or 2-D `(num_traces, N)` numpy array. |
+| `set_display(id, value)` | Update a `display` (numeric) or `text` (string) element. |
+| `poll_controls()` | Drain the return channel non-blocking; returns `ControlState(values, buttons)`. |
+| `save_plot(name)` | Ask the server to save the current buffer to a Parquet file with prefix `name`. |
+| `save_snapshot(path, server_url=None, animate=False)` | Download a self-contained static HTML snapshot of the current plot to `path`. |
+
+---
+
+## Examples gallery
+
+The [`examples/`](examples/) directory is a small, self-contained
+gallery. Each folder has a `run.py` you can copy, a `README.md` that
+explains what the code is teaching, and a pre-generated `snapshot.html`
+you can open in a browser to see what the live plot looked like —
+no server, no Python, no network required.
+
+| Example | What it teaches |
+|---|---|
+| [`examples/01_hello_world/`](examples/01_hello_world/) | The minimum three client calls: `local_plot`, `initialize_plots`, `send_array`. One plot, one sine wave. |
+| [`examples/02_multiple_subplots/`](examples/02_multiple_subplots/) | Multi-plot layouts, multi-trace plots, per-plot styling, flat-list `send_array`. Three subplots, four traces. |
+| [`examples/03_interactive_controls/`](examples/03_interactive_controls/) | Buttons, sliders, dials, and display boxes that drive your Python loop live. |
+
+To run any example, start the server in one terminal and `python run.py`
+in another from inside the example's folder — see
+[`examples/README.md`](examples/README.md) for details and the
+regenerate-all-snapshots one-liner.
+
+For an end-to-end smoke test of the full control palette (the gallery's
+snapshots can't capture interactive widget state),
+[`rtplot/interactive_test.py`](rtplot/interactive_test.py) walks a
+human through clicking each button, dragging the slider to specific
+values, typing into the number input, using the ± nudge arrows, and
+spinning the dial:
+
+```bash
+python -m rtplot.server_browser &
+python -m rtplot.interactive_test
+```
