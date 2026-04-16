@@ -15,13 +15,13 @@ and you watch signals and tweak gains from a laptop on the same Wi-Fi.
 Two processes talking over ZMQ, plus a browser viewer:
 
 ```mermaid
-flowchart LR
-    script["Your Python script<br/>• client.send_array()<br/>• client.poll_controls()"]
+flowchart TD
+    script["Your Python script<br/>send_array() · poll_controls()"]
     subgraph server["rtplot-server"]
         browser["browser tab<br/>localhost:8050"]
     end
-    script -- "data ZMQ :5555" --> server
-    server -- "controls ZMQ :5556" --> script
+    script -- "data :5555" --> server
+    server -- "controls :5556" --> script
 ```
 
 Sender and server don't have to be on the same machine — see the
@@ -58,10 +58,10 @@ pip install better-rtplot
 ## Your first plot
 
 ```mermaid
-flowchart LR
-    t1["terminal 1<br/>start the server<br/>(keep it running)"]
-    t2["terminal 2<br/>run your script<br/>(sends data on :5555)"]
-    br["browser<br/>open localhost:8050<br/>(shows the live plot)"]
+flowchart TD
+    t1["terminal 1: start the server"]
+    t2["terminal 2: run your script"]
+    br["browser: open localhost:8050"]
     t1 --> t2 --> br
 ```
 

@@ -23,9 +23,9 @@ can also flip live from the UI's **Bind** / **Connect** buttons.
 **Mode A — plot host binds** *(common: laptop in the lab)*
 
 ```mermaid
-flowchart LR
-    laptop["laptop (plot host)<br/>binds :5555 + :5556<br/><br/>python -m rtplot.server_browser"]
-    pi["Pi (sender)<br/>connects<br/><br/>client.configure_ip('laptop-ip')"]
+flowchart TD
+    laptop["laptop (plot host)<br/>binds :5555 + :5556"]
+    pi["Pi (sender)<br/>connects via configure_ip()"]
     pi -- "data :5555" --> laptop
     laptop -- "controls :5556" --> pi
 ```
@@ -33,9 +33,9 @@ flowchart LR
 **Mode B — sender binds** *(common: Pi has the static IP)*
 
 ```mermaid
-flowchart LR
-    laptop["laptop (plot host)<br/>connects<br/><br/>python -m rtplot.server_browser -p pi-ip"]
-    pi["Pi (sender)<br/>binds :5555 + :5556<br/><br/>(default client behavior)"]
+flowchart TD
+    laptop["laptop (plot host)<br/>connects via -p pi-ip"]
+    pi["Pi (sender)<br/>binds :5555 + :5556"]
     pi -- "data :5555" --> laptop
     laptop -- "controls :5556" --> pi
 ```
@@ -55,9 +55,9 @@ reach it.
 ### On the same LAN
 
 ```mermaid
-flowchart LR
-    v["viewer<br/>(browser on Wi-Fi)"]
-    s["plot host<br/>server + firewall allow :8050"]
+flowchart TD
+    v["viewer (browser on Wi-Fi)"]
+    s["plot host<br/>firewall allows :8050"]
     v -- "HTTP :8050" --> s
 ```
 
@@ -88,10 +88,10 @@ flowchart LR
 ### WSL2 wrinkle
 
 ```mermaid
-flowchart LR
-    v["viewer<br/>(browser on Wi-Fi)"]
-    w["Windows host<br/>netsh portproxy<br/>+ firewall allow"]
-    s["WSL2<br/>server"]
+flowchart TD
+    v["viewer (browser on Wi-Fi)"]
+    w["Windows host<br/>netsh portproxy + firewall"]
+    s["WSL2 server"]
     v -- ":8050" --> w
     w -- ":8050" --> s
 ```
@@ -120,8 +120,8 @@ Remove-NetFirewallRule -DisplayName "rtplot wsl"
 ### Across the internet
 
 ```mermaid
-flowchart LR
-    v["viewer anywhere<br/>(browser)"]
+flowchart TD
+    v["viewer anywhere (browser)"]
     t["tunnel<br/>cloudflared / tailscale"]
     s["plot host<br/>localhost:8050"]
     v -- "HTTPS" --> t
