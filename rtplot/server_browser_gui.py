@@ -483,7 +483,9 @@ def _run_with_gui(args, rest):
     # stays light and unintimidating.
     root = tk.Tk()
     root.title("rtplot server")
-    root.resizable(False, False)
+    # Width stays fixed, height is user-resizable so they always have
+    # an escape hatch if auto-sizing ever undercounts on a weird DPI.
+    root.resizable(False, True)
 
     try:
         style = ttk.Style()
@@ -560,6 +562,26 @@ def _run_with_gui(args, rest):
     except tk.TclError:
         pass
 
+    def _selectable_label(parent, text, font=("Consolas", 9), fg="#555"):
+        """A borderless tk.Entry styled to look like a Label but with
+        OS-selectable text. Used for URLs and any other string the user
+        might want to copy."""
+        e = tk.Entry(
+            parent,
+            font=font,
+            bg=BG,
+            fg=fg,
+            bd=0,
+            relief="flat",
+            readonlybackground=BG,
+            highlightthickness=0,
+            takefocus=0,
+            cursor="xterm",
+        )
+        e.insert(0, text)
+        e.configure(state="readonly")
+        return e
+
     main = ttk.Frame(root, padding=(24, 20, 24, 0))
     main.pack(fill="both", expand=True)
 
@@ -622,7 +644,7 @@ def _run_with_gui(args, rest):
         side="left", padx=(10, 0)
     )
 
-    # ---- LAN IPs as muted helper text ----
+    # ---- LAN IPs as muted helper text (selectable so users can copy) ----
     lan_ips = _lan_ips()
     if lan_ips:
         ttk.Label(
@@ -631,11 +653,11 @@ def _run_with_gui(args, rest):
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(14, 2))
         for ip in lan_ips:
-            ttk.Label(
+            _selectable_label(
                 main,
                 text=f"  http://{ip}:{args.port}",
-                style="Mono.TLabel",
-            ).pack(anchor="w")
+                font=("Consolas", 9),
+            ).pack(anchor="w", fill="x")
 
     # ---- Advanced collapse toggle ----
     advanced_expanded = {"value": False}
@@ -643,14 +665,25 @@ def _run_with_gui(args, rest):
     advanced_frame = ttk.Frame(main)
 
     def _relayout_window():
-        # Size the window to fit whichever sections are currently visible.
-        if advanced_expanded["value"]:
-            if log_state["expanded"]:
-                root.geometry("600x760")
-            else:
-                root.geometry("520x620")
+        # Compute the real requested height from Tk instead of hardcoding
+        # numbers that undercount on Windows/HiDPI. update_idletasks()
+        # forces pending pack/grid work to finish so winfo_reqheight()
+        # returns the "natural" height after the most recent toggle.
+        root.update_idletasks()
+        # Width is still fixed — pick it based on whether the wide log
+        # panel is visible, since that's the only thing that really
+        # needs more horizontal space.
+        if advanced_expanded["value"] and log_state["expanded"]:
+            target_w = 600
+        elif advanced_expanded["value"]:
+            target_w = 520
         else:
-            root.geometry("480x320") if lan_ips else root.geometry("480x260")
+            target_w = 480
+        req_h = root.winfo_reqheight()
+        # A small pad stops children from looking cramped against the
+        # bottom of the window on themes that underreport their size.
+        target_h = max(req_h + 8, 240)
+        root.geometry(f"{target_w}x{target_h}")
 
     def _toggle_advanced():
         advanced_expanded["value"] = not advanced_expanded["value"]
