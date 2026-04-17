@@ -1,22 +1,37 @@
-"""Browser-based rtplot server.
+"""Browser-based rtplot server with multi-tab routing.
 
-Drop-in replacement for ``rtplot.server`` that renders the realtime plots in
-a web browser via aiohttp + uPlot instead of pyqtgraph + Qt. The ZMQ
-protocol exposed to clients is identical, so existing client code keeps
-working unchanged.
+The ZMQ protocol exposed to clients is identical to the original server,
+so existing client code keeps working unchanged. Each tab owns its own
+ZMQ socket pair so one server process can host several senders at once:
+
+  * ``bind_me`` — a fixed, shared tab that binds ``tcp://*:5555`` (data)
+    and ``tcp://*:5556`` (controls). Any sender that connects to this
+    server's LAN IP ends up here. Not renameable, not deletable.
+
+  * ``tab_<id>`` — user-created tabs that dial out to a specific device
+    (``host:port``). Browsers switch between tabs via the tab bar at the
+    top of the UI.
+
+Each browser WebSocket is bound to exactly one tab at a time. Switching
+tabs is just a ``tab_subscribe`` message — the server immediately pushes
+that tab's config + buffer snapshot. Control events are routed to the
+subscribed tab's PUSH socket.
 """
 
 import argparse
 import asyncio
-import datetime
+import dataclasses
 import json
 import os
 import struct
 import sys
 import time
+import uuid
 import webbrowser
 from collections import OrderedDict
+from dataclasses import dataclass, field
 from time import perf_counter
+from typing import Optional
 
 import numpy as np
 import zmq
@@ -24,18 +39,15 @@ import zmq.asyncio
 
 # pyzmq's asyncio integration needs event_loop.add_reader(), which the
 # Windows-default ProactorEventLoop (Python 3.8+) does not implement.
-# Without this policy override, zmq_receiver() throws on its very first
-# recv_string, the task dies silently, and any data the client pushes
-# after that gets dropped — the browser plot stays blank with no visible
-# error. Force SelectorEventLoop on Windows before any asyncio loop is
-# created so pyzmq's reader-based integration works.
+# Without this policy override, zmq receives throw on first recv, the
+# task dies silently, and any data the client pushes after that gets
+# dropped — the browser plot stays blank with no visible error.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 try:
     from aiohttp import WSMsgType, web
 except ImportError as _exc:
-    import sys
     _missing = getattr(_exc, "name", None) or "aiohttp"
     sys.stderr.write(
         "\n[rtplot] Cannot import '{m}'. The browser server needs the\n"
@@ -46,6 +58,14 @@ except ImportError as _exc:
         "\n".format(m=_missing)
     )
     sys.exit(1)
+
+try:  # Optional: resources panel falls back gracefully if missing.
+    import psutil  # type: ignore
+    _PSUTIL_AVAILABLE = True
+except ImportError:
+    psutil = None  # type: ignore
+    _PSUTIL_AVAILABLE = False
+
 
 ############################
 # Command Line Arguments #
@@ -62,8 +82,9 @@ parser.add_argument(
     "-p",
     "--pi_ip",
     help=(
-        "The IP address for the pi. If supplied, the server connects to that"
-        " address; otherwise it binds and waits for the client to connect."
+        "If supplied, create an extra tab at startup that connects outbound"
+        " to that host[:port]. The default 'Shared - Bind to me' tab still"
+        " binds locally."
     ),
     action="store",
     type=str,
@@ -146,6 +167,7 @@ DEBUG_TEXT_ENABLED = args.debug
 SKIP_PLOT_DATAPOINTS = args.skip
 ADAPT_SKIP_PLOT_DATAPOINTS = args.adaptable
 
+
 ###############################
 # Local storage configuration #
 ###############################
@@ -154,9 +176,7 @@ DEFAULT_NUM_DATAPOINTS_IN_PLOT = 200
 MAX_LOCAL_STORAGE = 10_000_000
 INITIAL_NUM_TRACES = 50
 
-local_storage_buffer = np.zeros((INITIAL_NUM_TRACES, MAX_LOCAL_STORAGE))
-
-# Binary message format pushed to browsers:
+# Binary frame pushed to browsers (plot data):
 #   uint8  msg_type   (0 = snapshot, 1 = delta)
 #   uint8  status     (0 = green,    1 = red)
 #   uint8  reserved   (was non-plot trace count, kept for wire compat)
@@ -170,231 +190,32 @@ HEADER_SIZE = struct.calcsize(HEADER_FMT)
 MSG_SNAPSHOT = 0
 MSG_DELTA = 1
 
-# Mutable plot state.
-state = {
-    "li": DEFAULT_NUM_DATAPOINTS_IN_PLOT,
-    "buffer_bounds": np.array([0, DEFAULT_NUM_DATAPOINTS_IN_PLOT]),
-    "num_datapoints_in_plot": DEFAULT_NUM_DATAPOINTS_IN_PLOT,
-    "traces_per_plot": [],
-    "trace_labels": [],
-    "num_traces": 0,
-    "config_dict": None,
-    "config_message": None,
-    "fps": 0.0,
-    "title_color": "green",
-    "initialized": False,
-    "last_pushed_li": DEFAULT_NUM_DATAPOINTS_IN_PLOT,
-    "skip": SKIP_PLOT_DATAPOINTS,
-    "data_rate_counter": 0,
-    "data_between_adaptations": 0,
-    # Layout ordering: list of {"kind": "plot", "index": N} or
-    # {"kind": "controls", "index": N} entries in the order the user supplied.
-    "layout": [],
-    # List of rows, each a list of control element dicts.
-    "control_rows": [],
-    # Current slider values keyed by element id (seeded from 'value').
-    "slider_values": {},
-    # Latest display-box values keyed by element id (pushed via set_display).
-    "display_values": {},
-    # Set of display ids with a pending browser broadcast.
-    "display_dirty": set(),
-}
-
-
-def reset_buffer_state(num_datapoints_in_plot, num_traces):
-    """Reset the buffer indices when a new plot config arrives."""
-    state["num_datapoints_in_plot"] = num_datapoints_in_plot
-    state["li"] = num_datapoints_in_plot
-    state["buffer_bounds"] = np.array([0, num_datapoints_in_plot])
-    state["num_traces"] = num_traces
-    state["last_pushed_li"] = num_datapoints_in_plot
-    local_storage_buffer[:num_traces, : num_datapoints_in_plot] = 0
-
-
-def parse_config(json_config):
-    """Translate a client plot config into the buffer/trace metadata."""
-    traces_per_plot = []
-    trace_info = []
-    control_rows = []
-    slider_values = {}
-    layout = []
-    num_datapoints_in_plot = DEFAULT_NUM_DATAPOINTS_IN_PLOT
-
-    plot_counter = 0
-    for plot_description in json_config.values():
-        # Skip legacy non_plot_labels rows — save-to-parquet is gone,
-        # these have no runtime effect any more, but accept the shape
-        # so old client scripts don't crash.
-        if "non_plot_labels" in plot_description:
-            continue
-
-        if "controls" in plot_description:
-            row = plot_description["controls"]
-            for element in row:
-                if element.get("type") in ("slider", "dial") and "value" in element:
-                    slider_values[element["id"]] = float(element["value"])
-            layout.append({"kind": "controls", "index": len(control_rows)})
-            control_rows.append(row)
-            continue
-
-        trace_names = plot_description["names"]
-        traces_per_plot.append(len(trace_names))
-
-        if "xrange" in plot_description:
-            num_datapoints_in_plot = plot_description["xrange"]
-
-        for name in trace_names:
-            trace_info.append((name, plot_counter))
-
-        layout.append({"kind": "plot", "index": plot_counter})
-        plot_counter += 1
-
-    state["traces_per_plot"] = traces_per_plot
-    state["trace_labels"] = trace_info
-    state["control_rows"] = control_rows
-    # Preserve display values across re-init when the same ids are reused;
-    # drop ids that are no longer declared so stale data doesn't linger.
-    active_display_ids = {
-        el["id"]
-        for row in control_rows
-        for el in row
-        if el.get("type") == "display"
-    }
-    state["display_values"] = {
-        k: v for k, v in state["display_values"].items() if k in active_display_ids
-    }
-    state["display_dirty"] = {d for d in state["display_dirty"] if d in active_display_ids}
-    state["slider_values"] = slider_values
-    state["layout"] = layout
-
-    num_traces = sum(traces_per_plot)
-    reset_buffer_state(num_datapoints_in_plot, num_traces)
-
-    print("Initialized Plot!                 ")
-    return num_datapoints_in_plot
-
-
-###############################
-# WebSocket connection mgmt #
-###############################
-
-ws_clients = set()
-
-
-async def broadcast_text(message):
-    """Send a JSON dict to every connected client as a text frame."""
-    if not ws_clients:
-        return
-    payload = json.dumps(message)
-    dead = []
-    for ws in ws_clients:
-        try:
-            await ws.send_str(payload)
-        except (ConnectionResetError, RuntimeError):
-            dead.append(ws)
-    for ws in dead:
-        ws_clients.discard(ws)
-
-
-async def broadcast_binary(payload):
-    """Send raw bytes to every connected client as a binary frame."""
-    if not ws_clients or payload is None:
-        return
-    dead = []
-    for ws in ws_clients:
-        try:
-            await ws.send_bytes(payload)
-        except (ConnectionResetError, RuntimeError):
-            dead.append(ws)
-    for ws in dead:
-        ws_clients.discard(ws)
-
-
-def make_data_message(msg_type, lo, hi):
-    """Pack a binary delta/snapshot message for ``local_storage_buffer[:, lo:hi]``."""
-    num_traces = state["num_traces"]
-    n_samples = hi - lo
-    if n_samples <= 0 or num_traces <= 0:
-        return None
-    status_int = 1 if state["title_color"] == "red" else 0
-    fps = float(state["fps"]) if state["fps"] else 0.0
-    header = struct.pack(
-        HEADER_FMT, msg_type, status_int, 0, num_traces, n_samples, fps
-    )
-    payload = np.ascontiguousarray(
-        local_storage_buffer[:num_traces, lo:hi], dtype=np.float32
-    )
-    return header + payload.tobytes()
-
-
-def make_snapshot_message():
-    bounds = state["buffer_bounds"]
-    return make_data_message(MSG_SNAPSHOT, int(bounds[0]), int(bounds[1]))
-
-
-def build_config_message(config_dict):
-    """Convert the client-supplied OrderedDict into a JSON-friendly message."""
-    plots = []
-    for key, plot_description in config_dict.items():
-        # non_plot_labels used to feed the old Parquet save; it has no
-        # runtime effect any more but we still accept the key so old
-        # client scripts don't crash.
-        if "non_plot_labels" in plot_description:
-            continue
-        if "controls" in plot_description:
-            continue
-        plots.append(
-            {
-                "key": key,
-                "names": plot_description.get("names", []),
-                "colors": plot_description.get("colors"),
-                "line_style": plot_description.get("line_style"),
-                "line_width": plot_description.get("line_width"),
-                "title": plot_description.get("title"),
-                "xlabel": plot_description.get("xlabel"),
-                "ylabel": plot_description.get("ylabel"),
-                "xrange": plot_description.get("xrange"),
-                "yrange": plot_description.get("yrange"),
-                "height": plot_description.get("height"),
-            }
-        )
-    return {
-        "type": "config",
-        "plots": plots,
-        "controls": state["control_rows"],
-        "layout": state["layout"],
-        "slider_values": dict(state["slider_values"]),
-        "display_values": dict(state["display_values"]),
-        "row_layout": bool(NEW_SUBPLOT_IN_ROW),
-    }
-
-
-###############
-# ZMQ setup #
-###############
-
 ZMQ_DEFAULT_PORT = 5555
 ZMQ_CONTROL_PORT = ZMQ_DEFAULT_PORT + 1
+
+RECEIVED_PLOT_UPDATE = 0
+RECEIVED_DATA = 1
+SAVE_PLOT = 3
+RECEIVED_DISPLAY = 4
+
+BIND_ME_ID = "bind_me"
+BIND_ME_NAME = "Shared - Bind to me"
+
+TABS_FILE = os.path.join(os.path.expanduser("~"), ".rtplot", "tabs.json")
+
 zmq_ctx = zmq.asyncio.Context()
-zmq_socket = None
-control_push_socket = None
 
-# Live description of the current ZMQ wiring, used by the browser status pill
-# and reported back to clients on connect/reconfigure.
-zmq_status = {"mode": "bind", "target": f"*:{ZMQ_DEFAULT_PORT}"}
 
+###############################
+# Endpoint-parsing helpers #
+###############################
 
 def _normalize_connect_target(ip, port=ZMQ_DEFAULT_PORT):
-    """Return ``(tcp://...endpoint, host:port label)`` for a user-supplied IP.
-
-    ``port`` is the default port used when the caller only supplies a host.
-    When the caller supplies a host + port, that port is honored and ``port``
-    is ignored.
-    """
+    """Return ``(tcp://...endpoint, host:port label)`` for a user-supplied IP."""
     ip = ip.strip()
     if ip.startswith("tcp://"):
         endpoint = ip
-        label = ip[len("tcp://") :]
+        label = ip[len("tcp://"):]
     elif ip.count(":") == 1:
         endpoint = f"tcp://{ip}"
         label = ip
@@ -421,86 +242,445 @@ def _control_target_from_data(ip):
     return f"{raw}:{ZMQ_CONTROL_PORT}"
 
 
-def _open_zmq_socket(connect_ip=None):
-    """Create a fresh SUB socket bound or connected per ``connect_ip``."""
-    sock = zmq_ctx.socket(zmq.SUB)
-    if connect_ip:
-        endpoint, label = _normalize_connect_target(connect_ip)
-        sock.connect(endpoint)
-        zmq_status["mode"] = "connect"
-        zmq_status["target"] = label
-        print(f"ZMQ: connected to {endpoint}")
-    else:
-        sock.bind(f"tcp://*:{ZMQ_DEFAULT_PORT}")
-        zmq_status["mode"] = "bind"
-        zmq_status["target"] = f"*:{ZMQ_DEFAULT_PORT}"
-        print(f"ZMQ: bound on tcp://*:{ZMQ_DEFAULT_PORT}")
-    sock.setsockopt_string(zmq.SUBSCRIBE, "")
-    return sock
+###############################
+# Tab model #
+###############################
+
+@dataclass
+class Tab:
+    """One logical data source: bind (incoming) or connect (outbound)."""
+
+    id: str
+    name: str
+    mode: str                 # "bind" or "connect"
+    endpoint: str             # user-visible label, e.g. "*:5555" or "pi1:5555"
+    status: str = "idle"      # idle | streaming | error
+    error: Optional[str] = None
+
+    # Plot state
+    config_dict: Optional["OrderedDict"] = None
+    config_message: Optional[dict] = None
+    initialized: bool = False
+    num_datapoints_in_plot: int = DEFAULT_NUM_DATAPOINTS_IN_PLOT
+    li: int = DEFAULT_NUM_DATAPOINTS_IN_PLOT
+    buffer_bounds: np.ndarray = field(
+        default_factory=lambda: np.array([0, DEFAULT_NUM_DATAPOINTS_IN_PLOT])
+    )
+    num_traces: int = 0
+    traces_per_plot: list = field(default_factory=list)
+    trace_labels: list = field(default_factory=list)
+    last_pushed_li: int = DEFAULT_NUM_DATAPOINTS_IN_PLOT
+    layout: list = field(default_factory=list)
+    control_rows: list = field(default_factory=list)
+    slider_values: dict = field(default_factory=dict)
+    display_values: dict = field(default_factory=dict)
+    display_dirty: set = field(default_factory=set)
+    fps: float = 0.0
+    title_color: str = "green"
+
+    # ZMQ sockets + receiver task
+    data_sock: Optional[zmq.Socket] = None
+    ctrl_sock: Optional[zmq.Socket] = None
+    receiver_task: Optional[asyncio.Task] = None
+
+    # Data buffer, lazy-allocated on first use (roughly 4 GB virtual,
+    # but pages in only when written on Linux/Windows — a single tab
+    # typically touches a few MB worth of pages).
+    buffer: Optional[np.ndarray] = None
+
+    # Used by the resources panel so operators can see which tab is busy.
+    data_rate_hz: float = 0.0
+    _last_rx_ts: float = 0.0
+
+    def ensure_buffer(self):
+        if self.buffer is None:
+            self.buffer = np.zeros((INITIAL_NUM_TRACES, MAX_LOCAL_STORAGE))
+
+    def reset_buffer_state(self, num_datapoints_in_plot, num_traces):
+        """Reset the buffer indices when a new plot config arrives."""
+        self.ensure_buffer()
+        self.num_datapoints_in_plot = num_datapoints_in_plot
+        self.li = num_datapoints_in_plot
+        self.buffer_bounds = np.array([0, num_datapoints_in_plot])
+        self.num_traces = num_traces
+        self.last_pushed_li = num_datapoints_in_plot
+        self.buffer[:num_traces, :num_datapoints_in_plot] = 0
 
 
-def _open_control_socket(connect_ip=None):
-    """Create the return-channel PUSH socket aligned with the data socket.
+###############################
+# Tab registry #
+###############################
 
-    Mirrors the bind/connect orientation of _open_zmq_socket so calling
-    Connect/Bind in the browser reconfigures both sockets consistently.
+# id -> Tab. Always contains BIND_ME_ID.
+tabs: "OrderedDict[str, Tab]" = OrderedDict()
+
+# ws -> tab id the browser is currently viewing.
+ws_tab: "dict[web.WebSocketResponse, str]" = {}
+
+# set of all currently open WebSocketResponse instances.
+ws_clients: set = set()
+
+
+def tab_public(t: Tab) -> dict:
+    """Tab summary that's safe to send to browsers."""
+    return {
+        "id": t.id,
+        "name": t.name,
+        "mode": t.mode,
+        "endpoint": t.endpoint,
+        "status": t.status,
+        "error": t.error,
+    }
+
+
+def tabs_public() -> list:
+    return [tab_public(t) for t in tabs.values()]
+
+
+def viewers_of(tab_id: str) -> list:
+    return [ws for ws, tid in ws_tab.items() if tid == tab_id]
+
+
+###############################
+# Tab persistence #
+###############################
+
+def load_persisted_tabs() -> list:
+    """Load user-created connect tabs from disk. Returns [] on any failure."""
+    try:
+        with open(TABS_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return [
+            {
+                "id": str(e.get("id")),
+                "name": str(e.get("name", "")),
+                "endpoint": str(e.get("endpoint", "")),
+            }
+            for e in data
+            if e.get("id") and e.get("endpoint")
+            and str(e.get("id")) != BIND_ME_ID
+        ]
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+
+
+def save_persisted_tabs():
+    """Persist all connect tabs to ~/.rtplot/tabs.json."""
+    entries = [
+        {"id": t.id, "name": t.name, "endpoint": t.endpoint}
+        for t in tabs.values()
+        if t.mode == "connect"
+    ]
+    try:
+        os.makedirs(os.path.dirname(TABS_FILE), exist_ok=True)
+        with open(TABS_FILE, "w", encoding="utf-8") as fh:
+            json.dump(entries, fh, indent=2)
+    except OSError as exc:
+        print(f"[rtplot] Could not save tabs.json: {exc}")
+
+
+###############################
+# Config parsing (per tab) #
+###############################
+
+def parse_config(tab: Tab, json_config):
+    """Translate a client plot config into the tab's buffer/trace metadata."""
+    traces_per_plot = []
+    trace_info = []
+    control_rows = []
+    slider_values = {}
+    layout = []
+    num_datapoints_in_plot = DEFAULT_NUM_DATAPOINTS_IN_PLOT
+
+    plot_counter = 0
+    for plot_description in json_config.values():
+        # Legacy non_plot_labels rows — save-to-parquet is gone, but we
+        # accept the shape so old client scripts don't crash.
+        if "non_plot_labels" in plot_description:
+            continue
+
+        if "controls" in plot_description:
+            row = plot_description["controls"]
+            for element in row:
+                if element.get("type") in ("slider", "dial") and "value" in element:
+                    slider_values[element["id"]] = float(element["value"])
+            layout.append({"kind": "controls", "index": len(control_rows)})
+            control_rows.append(row)
+            continue
+
+        trace_names = plot_description["names"]
+        traces_per_plot.append(len(trace_names))
+
+        if "xrange" in plot_description:
+            num_datapoints_in_plot = plot_description["xrange"]
+
+        for name in trace_names:
+            trace_info.append((name, plot_counter))
+
+        layout.append({"kind": "plot", "index": plot_counter})
+        plot_counter += 1
+
+    tab.traces_per_plot = traces_per_plot
+    tab.trace_labels = trace_info
+    tab.control_rows = control_rows
+    # Preserve display values across re-init when the same ids are reused;
+    # drop ids that are no longer declared so stale data doesn't linger.
+    active_display_ids = {
+        el["id"]
+        for row in control_rows
+        for el in row
+        if el.get("type") == "display"
+    }
+    tab.display_values = {
+        k: v for k, v in tab.display_values.items() if k in active_display_ids
+    }
+    tab.display_dirty = {d for d in tab.display_dirty if d in active_display_ids}
+    tab.slider_values = slider_values
+    tab.layout = layout
+
+    num_traces = sum(traces_per_plot)
+    tab.reset_buffer_state(num_datapoints_in_plot, num_traces)
+
+    print(f"[{tab.id}] Initialized plot                 ")
+    return num_datapoints_in_plot
+
+
+def build_config_message(tab: Tab, config_dict) -> dict:
+    """Convert the client-supplied OrderedDict into a JSON-friendly message."""
+    plots = []
+    for key, plot_description in config_dict.items():
+        if "non_plot_labels" in plot_description:
+            continue
+        if "controls" in plot_description:
+            continue
+        plots.append(
+            {
+                "key": key,
+                "names": plot_description.get("names", []),
+                "colors": plot_description.get("colors"),
+                "line_style": plot_description.get("line_style"),
+                "line_width": plot_description.get("line_width"),
+                "title": plot_description.get("title"),
+                "xlabel": plot_description.get("xlabel"),
+                "ylabel": plot_description.get("ylabel"),
+                "xrange": plot_description.get("xrange"),
+                "yrange": plot_description.get("yrange"),
+                "height": plot_description.get("height"),
+            }
+        )
+    return {
+        "type": "config",
+        "tab": tab.id,
+        "plots": plots,
+        "controls": tab.control_rows,
+        "layout": tab.layout,
+        "slider_values": dict(tab.slider_values),
+        "display_values": dict(tab.display_values),
+        "row_layout": bool(NEW_SUBPLOT_IN_ROW),
+    }
+
+
+###############################
+# Binary payload construction #
+###############################
+
+def make_data_message(tab: Tab, msg_type, lo, hi):
+    """Pack a binary delta/snapshot message for ``tab.buffer[:, lo:hi]``."""
+    num_traces = tab.num_traces
+    n_samples = hi - lo
+    if n_samples <= 0 or num_traces <= 0 or tab.buffer is None:
+        return None
+    status_int = 1 if tab.title_color == "red" else 0
+    fps = float(tab.fps) if tab.fps else 0.0
+    header = struct.pack(
+        HEADER_FMT, msg_type, status_int, 0, num_traces, n_samples, fps
+    )
+    payload = np.ascontiguousarray(
+        tab.buffer[:num_traces, lo:hi], dtype=np.float32
+    )
+    return header + payload.tobytes()
+
+
+def make_snapshot_message(tab: Tab):
+    if tab.buffer is None:
+        return None
+    lo, hi = int(tab.buffer_bounds[0]), int(tab.buffer_bounds[1])
+    return make_data_message(tab, MSG_SNAPSHOT, lo, hi)
+
+
+###############################
+# WebSocket broadcasts #
+###############################
+
+async def ws_send_text(ws, message):
+    try:
+        await ws.send_str(json.dumps(message))
+        return True
+    except (ConnectionResetError, RuntimeError):
+        return False
+
+
+async def ws_send_bytes(ws, payload):
+    try:
+        await ws.send_bytes(payload)
+        return True
+    except (ConnectionResetError, RuntimeError):
+        return False
+
+
+async def broadcast_text_all(message):
+    """Send a JSON dict to every connected client."""
+    if not ws_clients:
+        return
+    dead = []
+    for ws in list(ws_clients):
+        if not await ws_send_text(ws, message):
+            dead.append(ws)
+    for ws in dead:
+        _remove_ws(ws)
+
+
+async def broadcast_text_tab(tab_id, message):
+    """Send a JSON dict only to browsers currently viewing ``tab_id``."""
+    for ws in viewers_of(tab_id):
+        await ws_send_text(ws, message)
+
+
+async def broadcast_bytes_tab(tab_id, payload):
+    if payload is None:
+        return
+    for ws in viewers_of(tab_id):
+        await ws_send_bytes(ws, payload)
+
+
+async def broadcast_tab_list():
+    await broadcast_text_all({"type": "tabs", "tabs": tabs_public()})
+
+
+async def broadcast_tab(tab_id):
+    t = tabs.get(tab_id)
+    if t is None:
+        return
+    await broadcast_text_all({"type": "tab", "tab": tab_public(t)})
+
+
+async def broadcast_peer_count():
+    """Tell every browser how many browsers are connected in total."""
+    await broadcast_text_all({"type": "peer_count", "count": len(ws_clients)})
+
+
+def _remove_ws(ws):
+    ws_clients.discard(ws)
+    ws_tab.pop(ws, None)
+
+
+###############################
+# ZMQ socket plumbing #
+###############################
+
+def _open_tab_sockets(tab: Tab):
+    """Open ``tab``'s data + control sockets according to its mode.
+
+    On failure, sets tab.status="error" and tab.error=<reason>; the tab
+    stays in the list but won't stream until re-opened.
     """
-    sock = zmq_ctx.socket(zmq.PUSH)
-    sock.setsockopt(zmq.SNDHWM, 1000)
-    # Don't linger on close — stale events should be dropped on reconfigure.
-    sock.setsockopt(zmq.LINGER, 0)
-    if connect_ip:
-        control_ip = _control_target_from_data(connect_ip)
-        endpoint, _ = _normalize_connect_target(control_ip, port=ZMQ_CONTROL_PORT)
-        sock.connect(endpoint)
-        print(f"ZMQ control: connected to {endpoint}")
-    else:
-        sock.bind(f"tcp://*:{ZMQ_CONTROL_PORT}")
-        print(f"ZMQ control: bound on tcp://*:{ZMQ_CONTROL_PORT}")
-    return sock
+    # Close any prior sockets first (e.g. on retry).
+    _close_tab_sockets(tab)
+
+    try:
+        data = zmq_ctx.socket(zmq.SUB)
+        data.setsockopt_string(zmq.SUBSCRIBE, "")
+        ctrl = zmq_ctx.socket(zmq.PUSH)
+        ctrl.setsockopt(zmq.SNDHWM, 1000)
+        ctrl.setsockopt(zmq.LINGER, 0)
+
+        if tab.mode == "bind":
+            data.bind(f"tcp://*:{ZMQ_DEFAULT_PORT}")
+            ctrl.bind(f"tcp://*:{ZMQ_CONTROL_PORT}")
+            tab.endpoint = f"*:{ZMQ_DEFAULT_PORT}"
+            print(f"[{tab.id}] ZMQ: bound on tcp://*:{ZMQ_DEFAULT_PORT}")
+        else:
+            data_ep, label = _normalize_connect_target(tab.endpoint)
+            data.connect(data_ep)
+            ctrl_ep, _ = _normalize_connect_target(
+                _control_target_from_data(tab.endpoint), port=ZMQ_CONTROL_PORT
+            )
+            ctrl.connect(ctrl_ep)
+            tab.endpoint = label
+            print(f"[{tab.id}] ZMQ: connected to {data_ep} (ctrl {ctrl_ep})")
+
+        tab.data_sock = data
+        tab.ctrl_sock = ctrl
+        tab.status = "idle"
+        tab.error = None
+    except Exception as exc:  # noqa: BLE001
+        tab.status = "error"
+        tab.error = str(exc)
+        print(f"[{tab.id}] ZMQ open failed: {exc}")
+        _close_tab_sockets(tab)
 
 
-zmq_socket = _open_zmq_socket(connect_ip=args.pi_ip)
-control_push_socket = _open_control_socket(connect_ip=args.pi_ip)
+def _close_tab_sockets(tab: Tab):
+    for attr in ("data_sock", "ctrl_sock"):
+        sock = getattr(tab, attr, None)
+        if sock is not None:
+            try:
+                sock.close(0)
+            except Exception:  # noqa: BLE001
+                pass
+            setattr(tab, attr, None)
 
-RECEIVED_PLOT_UPDATE = 0
-RECEIVED_DATA = 1
-SAVE_PLOT = 3
-RECEIVED_DISPLAY = 4
+
+async def _cancel_task(task):
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+        pass
 
 
-async def send_control_event(event):
+async def send_control_event(tab: Tab, event):
     """Forward a control event to the user's Python process, best-effort."""
-    if control_push_socket is None:
+    if tab.ctrl_sock is None:
         return
     try:
-        await control_push_socket.send_json(event, flags=zmq.DONTWAIT)
+        await tab.ctrl_sock.send_json(event, flags=zmq.DONTWAIT)
     except zmq.Again:
         pass
     except zmq.ZMQError:
         pass
 
 
-async def recv_array_async():
-    md = await zmq_socket.recv_json()
-    msg = await zmq_socket.recv()
+###############################
+# Per-tab receiver task #
+###############################
+
+async def _recv_array_async(sock):
+    md = await sock.recv_json()
+    msg = await sock.recv()
     arr = np.frombuffer(memoryview(msg), dtype=md["dtype"])
     return arr.reshape(md["shape"])
 
 
-async def zmq_receiver():
-    """Drain the ZMQ socket as fast as possible into the local buffer."""
+async def zmq_receiver(tab: Tab):
+    """Drain ``tab.data_sock`` as fast as possible into ``tab.buffer``."""
     last_time = perf_counter()
-    first_time = perf_counter()
     fps = None
 
     while True:
+        sock = tab.data_sock
+        if sock is None:
+            await asyncio.sleep(0.2)
+            continue
+
         try:
-            received = await zmq_socket.recv_string()
+            received = await sock.recv_string()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            print(f"ZMQ receive error: {exc}")
+            print(f"[{tab.id}] ZMQ receive error: {exc}")
             await asyncio.sleep(0.1)
             continue
 
@@ -508,51 +688,49 @@ async def zmq_receiver():
             category = int(received)
         except ValueError:
             if DEBUG_TEXT_ENABLED:
-                print(f"Had a value error. Expected int, received: {received}")
+                print(f"[{tab.id}] value error, expected int, got: {received}")
             else:
-                print(
-                    "Lost synchronization between client and server."
-                    " Please restart client"
-                )
+                print(f"[{tab.id}] lost sync with client. Restart client.")
             continue
 
+        now = perf_counter()
+        tab._last_rx_ts = now
+
         if category == RECEIVED_PLOT_UPDATE:
-            cfg = await zmq_socket.recv_json(object_pairs_hook=OrderedDict)
-            parse_config(cfg)
-            state["config_dict"] = cfg
-            state["config_message"] = build_config_message(cfg)
-            state["initialized"] = True
-            state["data_rate_counter"] = 0
-            state["data_between_adaptations"] = 0
-            if ADAPT_SKIP_PLOT_DATAPOINTS:
-                state["skip"] = 1
+            cfg = await sock.recv_json(object_pairs_hook=OrderedDict)
+            parse_config(tab, cfg)
+            tab.config_dict = cfg
+            tab.config_message = build_config_message(tab, cfg)
+            tab.initialized = True
             fps = None
-            state["fps"] = 0.0
-            last_time = perf_counter()
-            first_time = perf_counter()
-            await broadcast_text(state["config_message"])
-            snap = make_snapshot_message()
+            tab.fps = 0.0
+            last_time = now
+            tab.status = "streaming"
+            tab.error = None
+            await broadcast_text_tab(tab.id, tab.config_message)
+            await broadcast_tab(tab.id)
+            snap = make_snapshot_message(tab)
             if snap is not None:
-                await broadcast_binary(snap)
-            # Echo seeded slider defaults back to the client so its first
+                await broadcast_bytes_tab(tab.id, snap)
+            # Echo seeded slider defaults back so client's first
             # poll_controls() call already sees the declared initial values.
-            for sid, svalue in state["slider_values"].items():
-                await send_control_event({"type": "slider", "id": sid, "value": svalue})
+            for sid, svalue in tab.slider_values.items():
+                await send_control_event(
+                    tab, {"type": "slider", "id": sid, "value": svalue}
+                )
 
         elif category == RECEIVED_DATA:
-            arr = await recv_array_async()
-            if not state["initialized"]:
+            arr = await _recv_array_async(sock)
+            if not tab.initialized:
                 continue
+            tab.ensure_buffer()
 
             num_values = arr.shape[1]
-            li = state["li"]
-            num_traces = state["num_traces"]
+            li = tab.li
+            num_traces = tab.num_traces
 
-            local_storage_buffer[:num_traces, li : li + num_values] = arr[
-                :num_traces, :
-            ]
+            tab.buffer[:num_traces, li:li + num_values] = arr[:num_traces, :]
 
-            now = perf_counter()
             dt = now - last_time
             last_time = now
             if dt > 0:
@@ -561,1173 +739,212 @@ async def zmq_receiver():
                 else:
                     s = float(np.clip(dt * 3.0, 0, 1))
                     fps = fps * (1 - s) + (1.0 / dt) * s
-                state["fps"] = fps
+                tab.fps = fps
+                tab.data_rate_hz = fps
 
-            state["li"] = li + num_values
-            state["buffer_bounds"][0] += num_values
-            state["buffer_bounds"][1] += num_values
-
-            # The browser path is now decoupled from the data path (deltas only
-            # carry the new samples), so the green/red logic can stay relaxed —
-            # the server keeps up so long as the asyncio loop is keeping up.
-            state["title_color"] = "green"
+            tab.li = li + num_values
+            tab.buffer_bounds[0] += num_values
+            tab.buffer_bounds[1] += num_values
+            tab.title_color = "green"
+            if tab.status != "streaming":
+                tab.status = "streaming"
+                tab.error = None
+                await broadcast_tab(tab.id)
 
         elif category == SAVE_PLOT:
-            # Category "3" used to save the buffer to a Parquet file; the
-            # feature has been removed. We still drain the follow-up
-            # string frame that old clients send so the socket stays in
-            # sync, but otherwise ignore the request.
+            # Legacy parquet-save; ignored but still drained.
             try:
-                await zmq_socket.recv_string()
+                await sock.recv_string()
             except Exception:  # noqa: BLE001
                 pass
 
         elif category == RECEIVED_DISPLAY:
-            payload = await zmq_socket.recv_json()
+            payload = await sock.recv_json()
             display_id = payload.get("id")
             value = payload.get("value")
             if display_id is None:
                 continue
             if not isinstance(value, (int, float, str)):
                 continue
-            if state["display_values"].get(display_id) != value:
-                state["display_values"][display_id] = value
-                state["display_dirty"].add(display_id)
+            if tab.display_values.get(display_id) != value:
+                tab.display_values[display_id] = value
+                tab.display_dirty.add(display_id)
 
 
-async def reconfigure_zmq(app, connect_ip=None):
-    """Tear down the running receiver, swap the socket, restart the receiver.
-
-    ``connect_ip`` is None to bind on the default port, or a "host[:port]"
-    string to connect outbound to a publisher. Resets the plot buffer state
-    so the browser doesn't show data from the previous source.
-    """
-    global zmq_socket
-    global control_push_socket
-
-    old_task = app.get("zmq_task")
-    if old_task is not None:
-        old_task.cancel()
-        try:
-            await old_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
-
-    try:
-        zmq_socket.close(0)
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        if control_push_socket is not None:
-            control_push_socket.close(0)
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Give the OS a moment to release the freed TCP ports before we try
-    # to re-bind them. Linux usually releases immediately; Windows can
-    # hold on briefly even with linger=0, which caused "Bind doesn't work"
-    # reports in the exe. 150 ms is empirically enough in both cases.
-    await asyncio.sleep(0.15)
-
-    # Retry the open with a small backoff in case the OS is still
-    # releasing the port. Three quick attempts cover the typical Windows
-    # rebind race without making the UI feel sluggish.
-    def _try_open_zmq(ip):
-        last_exc = None
-        for attempt in range(3):
-            try:
-                return _open_zmq_socket(connect_ip=ip)
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                print(f"ZMQ open failed (attempt {attempt + 1}/3): {exc}")
-                time.sleep(0.1 * (attempt + 1))
-        raise last_exc if last_exc else RuntimeError("zmq open failed")
-
-    def _try_open_control(ip):
-        last_exc = None
-        for attempt in range(3):
-            try:
-                return _open_control_socket(connect_ip=ip)
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
-                print(f"ZMQ control open failed (attempt {attempt + 1}/3): {exc}")
-                time.sleep(0.1 * (attempt + 1))
-        raise last_exc if last_exc else RuntimeError("zmq control open failed")
-
-    try:
-        zmq_socket = _try_open_zmq(connect_ip)
-    except Exception as exc:  # noqa: BLE001
-        print(f"ZMQ reconfigure failed ({exc}); keeping previous state")
-        # Leave zmq_status pointing at whatever the caller asked for so
-        # the browser knows the new intent; the zmq_socket global may be
-        # in a partially-closed state but we'll retry on the next click.
-        await broadcast_zmq_status()
-        return
-
-    try:
-        control_push_socket = _try_open_control(connect_ip)
-    except Exception as exc:  # noqa: BLE001
-        print(f"ZMQ control reconfigure failed ({exc}); control channel offline")
-        control_push_socket = None
-
-    state["initialized"] = False
-    state["config_message"] = None
-    state["num_traces"] = 0
-    state["last_pushed_li"] = state["li"]
-    state["control_rows"] = []
-    state["layout"] = []
-    state["slider_values"] = {}
-    state["display_values"] = {}
-    state["display_dirty"] = set()
-
-    await broadcast_zmq_status()
-    app["zmq_task"] = asyncio.create_task(zmq_receiver())
-
-
-async def broadcast_zmq_status():
-    await broadcast_text(
-        {"type": "zmq_status", "mode": zmq_status["mode"], "target": zmq_status["target"]}
-    )
-
+###############################
+# Pusher tasks #
+###############################
 
 async def display_pusher():
-    """Push any dirty display-box values to browsers at ~30 Hz."""
+    """Push any dirty display-box values to viewers at ~30 Hz, per tab."""
     target_dt = 1.0 / 30.0
     while True:
         await asyncio.sleep(target_dt)
         if not ws_clients:
             continue
-        dirty = state["display_dirty"]
-        if not dirty:
-            continue
-        values = {k: state["display_values"][k] for k in dirty}
-        state["display_dirty"] = set()
-        await broadcast_text({"type": "display_update", "values": values})
+        for t in list(tabs.values()):
+            if not t.display_dirty:
+                continue
+            values = {k: t.display_values[k] for k in t.display_dirty}
+            t.display_dirty = set()
+            await broadcast_text_tab(
+                t.id, {"type": "display_update", "tab": t.id, "values": values}
+            )
 
 
 async def ws_pusher():
-    """Push new samples to all browsers as binary delta frames.
-
-    Sleeps at 1/args.rate between iterations and only sends when the receiver
-    has actually accumulated new samples since the last push, so it never
-    burns CPU on no-op pushes. When the unsent backlog is bigger than the
-    visible window we send a snapshot instead of a delta.
-    """
+    """Push new samples to viewers as binary delta frames, per tab."""
     target_dt = 1.0 / max(1, args.rate)
     while True:
         await asyncio.sleep(target_dt)
-        if not ws_clients or not state["initialized"]:
+        if not ws_clients:
             continue
+        for t in list(tabs.values()):
+            if not t.initialized:
+                continue
+            if not viewers_of(t.id):
+                # No browser is watching this tab, skip encoding cost.
+                continue
 
-        current_li = state["li"]
-        last_li = state["last_pushed_li"]
-        if current_li <= last_li:
+            current_li = t.li
+            last_li = t.last_pushed_li
+            if current_li <= last_li:
+                continue
+
+            num_traces = t.num_traces
+            if num_traces == 0:
+                continue
+
+            window = t.num_datapoints_in_plot
+            n_new = current_li - last_li
+            if n_new >= window:
+                payload = make_data_message(t, MSG_SNAPSHOT, current_li - window, current_li)
+            else:
+                payload = make_data_message(t, MSG_DELTA, last_li, current_li)
+            t.last_pushed_li = current_li
+
+            if payload is not None:
+                await broadcast_bytes_tab(t.id, payload)
+
+
+async def resources_pusher():
+    """Push CPU + memory + per-tab Hz to all browsers every 2 s."""
+    target_dt = 2.0
+    # First call to cpu_percent() always returns 0.0; prime it so the
+    # user's first reading is real.
+    if _PSUTIL_AVAILABLE:
+        try:
+            psutil.cpu_percent(interval=None)
+        except Exception:  # noqa: BLE001
+            pass
+
+    while True:
+        await asyncio.sleep(target_dt)
+        if not ws_clients:
             continue
-
-        num_traces = state["num_traces"]
-        if num_traces == 0:
-            continue
-
-        window = state["num_datapoints_in_plot"]
-        n_new = current_li - last_li
-        if n_new >= window:
-            payload = make_snapshot_message()
-        else:
-            payload = make_data_message(MSG_DELTA, last_li, current_li)
-
-        state["last_pushed_li"] = current_li
-
-        if payload is not None:
-            await broadcast_binary(payload)
-
-
-###################
-# HTTP / WebSocket #
-###################
-
-INDEX_HTML = """<!doctype html>
-<html lang=\"en\">
-<head>
-<meta charset=\"utf-8\" />
-<title>rtplot</title>
-<link rel=\"stylesheet\" href=\"/static/uPlot.min.css\" />
-<style>
-  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; background: #fafafa; color: #222; }
-  #header { display: flex; align-items: center; gap: 16px; padding: 8px 16px; background: #fff; border-bottom: 1px solid #ddd; position: sticky; top: 0; z-index: 10; }
-  #header h1 { margin: 0; font-size: calc(18px * var(--ui-scale)); font-weight: 600; }
-  #status { font-size: calc(14px * var(--ui-scale)); padding: 4px 10px; border-radius: 4px; background: #eee; }
-  #status.green { background: #d4f5d4; color: #186a18; }
-  #status.red { background: #f9d4d4; color: #8a1a1a; }
-  .btn { padding: 6px 12px; font-size: calc(14px * var(--ui-scale)); border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; }
-  /* zmq mode buttons: the currently-active mode is green + not clickable, the other is white + clickable */
-  .btn.zmq-active { background: #d4f5d4; color: #186a18; border-color: #8dc88d; cursor: default; }
-  .btn.zmq-active:hover { background: #d4f5d4; }
-  .btn.zmq-disabled { background: #f0f0f0; color: #aaa; border-color: #ccc; cursor: not-allowed; }
-  .btn.zmq-disabled:hover { background: #f0f0f0; }
-  .btn:hover { background: #f0f0f0; }
-  #ip-input { padding: 6px 8px; font-size: calc(13px * var(--ui-scale)); border: 1px solid #888; border-radius: 4px; width: 170px; font-family: monospace; }
-  #zmq-mode { font-size: calc(12px * var(--ui-scale)); color: #555; padding: 2px 8px; background: #eef; border-radius: 4px; }
-  #ws-status { font-size: calc(12px * var(--ui-scale)); color: #666; margin-left: auto; }
-  #plots { display: flex; padding: 12px; gap: 12px; }
-  #plots.row { flex-direction: column; }
-  #plots.col { flex-direction: row; flex-wrap: wrap; }
-  .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; flex: 1 1 auto; min-width: 320px; }
-  .plot-title { font-size: 13px; font-weight: 600; margin: 0 0 4px 4px; color: #333; }
-  :root { --ctrl-unit-h: 38px; --ui-scale: 1; }
-  .ctrl-row { display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: #fff; border: 1px solid #ddd; border-radius: 4px; flex-wrap: wrap; }
-  .ctrl-item { display: flex; align-items: center; gap: 6px; }
-  .ctrl-item.flex { flex: 1 1 220px; min-width: 200px; }
-  .ctrl-item label { font-size: calc(13px * var(--ui-scale)); color: #444; }
-  .ctrl-btn { padding: 8px 16px; font-size: calc(14px * var(--ui-scale)); border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; font-weight: 500; display: flex; align-items: center; justify-content: center; }
-  .ctrl-item-tall > .ctrl-btn { align-self: stretch; padding-top: 0; padding-bottom: 0; font-size: calc(16px * var(--ui-scale)); }
-  .ctrl-item-tall > .ctrl-rangeinput,
-  .ctrl-item-tall > .ctrl-dial,
-  .ctrl-item-tall > .ctrl-numinput,
-  .ctrl-item-tall > .ctrl-nudgebtn,
-  .ctrl-item-tall > .ctrl-val { align-self: center; }
-  .ctrl-btn:hover { background: #f0f0f0; }
-  .ctrl-btn:active { background: #e2e2e2; }
-  .ctrl-btn-colored:hover { filter: brightness(0.93); }
-  .ctrl-btn-colored:active { filter: brightness(0.85); }
-  .ctrl-slider .ctrl-rangeinput { flex: 1; min-width: 120px; }
-  .ctrl-numinput { width: 72px; font-family: monospace; font-size: calc(13px * var(--ui-scale)); padding: 4px 6px; border: 1px solid #b8b8b8; border-radius: 3px; background: #fff; color: #222; text-align: right; -moz-appearance: textfield; }
-  .ctrl-numinput::-webkit-outer-spin-button,
-  .ctrl-numinput::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-  .ctrl-nudgebtn { width: 26px; height: 26px; font-size: calc(15px * var(--ui-scale)); font-weight: 600; line-height: 1; padding: 0; border: 1px solid #b8b8b8; background: #f7f7f7; color: #333; cursor: pointer; border-radius: 3px; }
-  .ctrl-nudgebtn:hover { background: #e9e9e9; }
-  .ctrl-nudgebtn:active { background: #dcdcdc; }
-  .ctrl-dial { cursor: ns-resize; flex: 0 0 auto; touch-action: none; user-select: none; }
-  .ctrl-dial-dragging { cursor: ns-resize; }
-  .ctrl-dial .dial-track { fill: #fafafa; stroke: #bcbcbc; stroke-width: 2.5; }
-  .ctrl-dial .dial-indicator { stroke: #2a5db0; stroke-width: 4; stroke-linecap: round; }
-  .ctrl-dial .dial-arrow { fill: #c0c0c0; pointer-events: none; user-select: none; }
-  .ctrl-dial:hover .dial-track { stroke: #888; }
-  .ctrl-dial:hover .dial-arrow { fill: #888; }
-  .ctrl-val { font-family: monospace; font-size: calc(13px * var(--ui-scale)); min-width: 56px; text-align: right; color: #222; }
-  .ctrl-display .ctrl-val { background: #f3f3f3; padding: 4px 10px; border-radius: 3px; min-width: 72px; border: 1px solid #e2e2e2; }
-  .ctrl-textval { background: #eef3ff; padding: 6px 12px; border-radius: 3px; border: 1px solid #c8d6ff; color: #1a3a7a; text-align: left; min-width: 160px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: calc(14px * var(--ui-scale)); }
-  #menu-btn { margin-left: 8px; width: 34px; height: 34px; padding: 0; font-size: calc(18px * var(--ui-scale)); line-height: 1; display: flex; align-items: center; justify-content: center; }
-  #menu-panel { position: fixed; top: 56px; right: 16px; background: #fff; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); padding: 16px 18px; min-width: 260px; z-index: 20; display: none; }
-  #menu-panel.open { display: block; }
-  #menu-panel h2 { margin: 0 0 10px 0; font-size: calc(14px * var(--ui-scale)); font-weight: 600; color: #333; text-transform: uppercase; letter-spacing: 0.03em; }
-  #menu-panel .menu-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-  #menu-panel .menu-row:last-child { margin-bottom: 0; }
-  #menu-panel label { font-size: calc(12px * var(--ui-scale)); color: #555; font-weight: 500; }
-  #menu-panel .menu-ctrl { display: flex; align-items: center; gap: 8px; }
-  #menu-panel input[type=range] { flex: 1; }
-  #menu-panel input[type=number] { width: 88px; font-family: monospace; font-size: calc(13px * var(--ui-scale)); padding: 4px 6px; border: 1px solid #b8b8b8; border-radius: 3px; text-align: right; -moz-appearance: textfield; }
-  #menu-panel input[type=number]::-webkit-outer-spin-button,
-  #menu-panel input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-  #menu-panel .menu-val { font-family: monospace; font-size: calc(12px * var(--ui-scale)); min-width: 44px; text-align: right; color: #333; }
-  #menu-panel .menu-hint { font-size: calc(11px * var(--ui-scale)); color: #888; margin-top: 2px; }
-  #menu-panel .menu-reset { margin-top: 6px; font-size: calc(11px * var(--ui-scale)); background: transparent; border: none; color: #2a5db0; cursor: pointer; padding: 2px 0; text-align: left; }
-  #menu-panel .menu-reset:hover { text-decoration: underline; }
-</style>
-</head>
-<body>
-  <div id=\"header\">
-    <h1>rtplot</h1>
-    <div id=\"status\" class=\"green\">Rate: -- Hz</div>
-    <div id=\"zmq-mode\">ZMQ: --</div>
-    <input id=\"ip-input\" type=\"text\" placeholder=\"host[:port]\" />
-    <button id=\"connect-btn\" class=\"btn\">Connect</button>
-    <button id=\"bind-btn\" class=\"btn\">Bind</button>
-    <div id=\"ws-status\">connecting...</div>
-    <button id=\"menu-btn\" class=\"btn\" title=\"Settings\" aria-label=\"Settings\">&#9776;</button>
-  </div>
-  <div id=\"menu-panel\" aria-hidden=\"true\">
-    <h2>Settings</h2>
-    <div class=\"menu-row\">
-      <label for=\"menu-font\">UI font scale</label>
-      <div class=\"menu-ctrl\">
-        <input id=\"menu-font\" type=\"range\" min=\"0.7\" max=\"2.0\" step=\"0.05\" value=\"1\" />
-        <span id=\"menu-font-val\" class=\"menu-val\">1.00x</span>
-      </div>
-    </div>
-    <div class=\"menu-row\">
-      <label for=\"menu-xrange\">Visible samples per plot</label>
-      <div class=\"menu-ctrl\">
-        <input id=\"menu-xrange\" type=\"number\" min=\"10\" step=\"10\" placeholder=\"auto\" />
-        <span class=\"menu-val\">samples</span>
-      </div>
-    </div>
-    <div class=\"menu-row\">
-      <label for=\"menu-maxfps\">Max plot refresh rate</label>
-      <div class=\"menu-ctrl\">
-        <input id=\"menu-maxfps\" type=\"number\" min=\"1\" step=\"1\" placeholder=\"auto\" />
-        <span class=\"menu-val\">Hz</span>
-      </div>
-      <div id=\"menu-monitor-hint\" class=\"menu-hint\">Monitor: measuring…</div>
-    </div>
-    <button id=\"menu-reset\" class=\"menu-reset\" type=\"button\">Reset to defaults</button>
-  </div>
-  <div id=\"plots\" class=\"row\"></div>
-  <script src=\"/static/uPlot.iife.min.js\"></script>
-  <script>
-    (function () {
-      const COLOR_MAP = {
-        r: 'rgb(255,0,0)', g: 'rgb(0,200,0)', b: 'rgb(0,0,255)',
-        c: 'rgb(0,200,200)', m: 'rgb(200,0,200)', y: 'rgb(200,200,0)',
-        k: 'rgb(0,0,0)', w: 'rgb(255,255,255)'
-      };
-      const DEFAULT_COLORS = ['r', 'g', 'b', 'c', 'm', 'y'];
-
-      function resolveColor(c) {
-        if (c == null) return 'rgb(0,0,0)';
-        if (Array.isArray(c) && c.length >= 3) return `rgb(${c[0]},${c[1]},${c[2]})`;
-        if (typeof c === 'string') {
-          if (COLOR_MAP[c]) return COLOR_MAP[c];
-          return c;
+        msg = {
+            "type": "resources",
+            "available": _PSUTIL_AVAILABLE,
+            "tabs": len(tabs),
+            "viewers": len(ws_clients),
+            "rates": {tid: t.data_rate_hz for tid, t in tabs.items()},
         }
-        return 'rgb(0,0,0)';
-      }
-
-      const plotsDiv = document.getElementById('plots');
-      const statusDiv = document.getElementById('status');
-      const wsStatus = document.getElementById('ws-status');
-      const ipInput = document.getElementById('ip-input');
-      const connectBtn = document.getElementById('connect-btn');
-      const bindBtn = document.getElementById('bind-btn');
-      const zmqMode = document.getElementById('zmq-mode');
-      const menuBtn = document.getElementById('menu-btn');
-      const menuPanel = document.getElementById('menu-panel');
-      const menuFontInput = document.getElementById('menu-font');
-      const menuFontVal = document.getElementById('menu-font-val');
-      const menuXrangeInput = document.getElementById('menu-xrange');
-      const menuMaxfpsInput = document.getElementById('menu-maxfps');
-      const menuMonitorHint = document.getElementById('menu-monitor-hint');
-      const menuResetBtn = document.getElementById('menu-reset');
-
-      // ---- Detect the monitor's refresh rate on page load ----
-      // Browsers deliberately don't expose the hardware refresh rate
-      // (fingerprinting), so we calibrate it by running rAF callbacks
-      // for ~500 ms and counting. requestAnimationFrame is locked to
-      // the display refresh, so frames_per_sec == monitor Hz as long
-      // as the tab is active during calibration.
-      let monitorHz = 0;
-      (function measureMonitorHz() {
-        let count = 0;
-        let start = 0;
-        function tick(t) {
-          if (start === 0) start = t;
-          count += 1;
-          const elapsed = t - start;
-          if (elapsed < 500) {
-            requestAnimationFrame(tick);
-          } else {
-            const measured = count * 1000 / elapsed;
-            // Snap to common refresh rates so users see clean numbers
-            // (60/75/90/120/144/165/240) instead of 59.8.
-            const common = [30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240];
-            let best = measured;
-            let bestDiff = Infinity;
-            for (const c of common) {
-              const d = Math.abs(measured - c);
-              if (d < bestDiff && d / c < 0.05) { bestDiff = d; best = c; }
-            }
-            monitorHz = Math.round(best);
-            if (menuMonitorHint) {
-              menuMonitorHint.textContent = `Monitor: ${monitorHz} Hz (rAF cap)`;
-            }
-            menuMaxfpsInput.placeholder = `auto = ${monitorHz}`;
-          }
-        }
-        requestAnimationFrame(tick);
-      })();
-
-      // ---- Persistent client-side settings (hamburger menu) ----
-      const SETTINGS_KEY = 'rtplotSettings.v1';
-      const DEFAULT_SETTINGS = { fontScale: 1.0, visibleSamples: null, maxFps: null };
-      let settings = Object.assign({}, DEFAULT_SETTINGS);
-      try {
-        const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
-        settings = Object.assign(settings, saved);
-      } catch (e) {}
-      function saveSettings() {
-        try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
-      }
-      function applyFontScale() {
-        const s = Number(settings.fontScale) || 1;
-        document.documentElement.style.setProperty('--ui-scale', s);
-        menuFontInput.value = s;
-        menuFontVal.textContent = s.toFixed(2) + 'x';
-      }
-      function applyVisibleSamples() {
-        // Zoom uPlot's x scale to show only the newest N samples. If N is
-        // null/unset, or >= the plot's full xrange, show everything. This
-        // never adds data — it only hides older samples.
-        const n = settings.visibleSamples;
-        plots.forEach(p => {
-          let lo = 0, hi = p.xrange - 1;
-          if (n && Number.isFinite(n) && n > 0 && n < p.xrange) {
-            lo = p.xrange - n;
-          }
-          try { p.uplot.setScale('x', { min: lo, max: hi }); } catch (e) {}
-        });
-      }
-      function syncMenuInputs() {
-        menuFontInput.value = Number(settings.fontScale) || 1;
-        menuFontVal.textContent = (Number(settings.fontScale) || 1).toFixed(2) + 'x';
-        menuXrangeInput.value = settings.visibleSamples || '';
-        menuMaxfpsInput.value = settings.maxFps || '';
-      }
-      menuBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        menuPanel.classList.toggle('open');
-      });
-      document.addEventListener('click', (e) => {
-        if (!menuPanel.classList.contains('open')) return;
-        if (menuPanel.contains(e.target) || menuBtn.contains(e.target)) return;
-        menuPanel.classList.remove('open');
-      });
-      menuFontInput.addEventListener('input', () => {
-        settings.fontScale = Number(menuFontInput.value);
-        applyFontScale();
-        saveSettings();
-      });
-      menuXrangeInput.addEventListener('change', () => {
-        const v = Number(menuXrangeInput.value);
-        settings.visibleSamples = (Number.isFinite(v) && v > 0) ? v : null;
-        applyVisibleSamples();
-        saveSettings();
-      });
-      menuMaxfpsInput.addEventListener('change', () => {
-        const v = Number(menuMaxfpsInput.value);
-        settings.maxFps = (Number.isFinite(v) && v > 0) ? v : null;
-        saveSettings();
-      });
-      menuResetBtn.addEventListener('click', () => {
-        settings = Object.assign({}, DEFAULT_SETTINGS);
-        saveSettings();
-        syncMenuInputs();
-        applyFontScale();
-        applyVisibleSamples();
-      });
-      applyFontScale();
-      syncMenuInputs();
-
-      const HEADER_SIZE = 16;
-      const MSG_SNAPSHOT = 0;
-      const MSG_DELTA = 1;
-
-      let plots = [];          // { uplot, xs, traceCount, startIdx, xrange, buffers, height }
-      let totalTraces = 0;
-      let socket = null;
-      let pendingFrame = false;
-      let lastStatus = { fps: 0, statusByte: 0, nonPlot: 0, peers: 0, dirty: true };
-      const controlElements = { displays: {}, displayFormats: {}, displayKinds: {}, sliders: {} };
-
-      function sendCtrl(msg) {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify(msg));
-        }
-      }
-
-      function parseDisplayFormat(fmt) {
-        if (typeof fmt !== 'string') return null;
-        const m = fmt.match(/\\{:\\.(\\d+)f\\}/);
-        if (m) return { kind: 'fixed', digits: parseInt(m[1], 10) };
-        return null;
-      }
-
-      function formatDisplay(id, value) {
-        if (value === null || value === undefined) return '--';
-        if (controlElements.displayKinds[id] === 'text') return String(value);
-        if (typeof value === 'string') return value;
-        if (Number.isNaN(value)) return '--';
-        const fmt = controlElements.displayFormats[id];
-        if (fmt && fmt.kind === 'fixed') return Number(value).toFixed(fmt.digits);
-        return String(value);
-      }
-
-      function makeScalarControl(el, renderWidget) {
-        const hasMin = el.min !== undefined && Number.isFinite(Number(el.min));
-        const hasMax = el.max !== undefined && Number.isFinite(Number(el.max));
-        const min = hasMin ? Number(el.min) : -Infinity;
-        const max = hasMax ? Number(el.max) : Infinity;
-        const step = (el.step !== undefined && Number(el.step) > 0) ? Number(el.step) : 0.01;
-        const fmt = parseDisplayFormat(el.format);
-        const formatVal = (v) => (fmt && fmt.kind === 'fixed')
-          ? Number(v).toFixed(fmt.digits)
-          : String(v);
-        const clampRound = (v) => {
-          v = Math.max(min, Math.min(max, Number(v)));
-          const base = hasMin ? min : 0;
-          const snapped = Math.round((v - base) / step) * step + base;
-          return Number(snapped.toFixed(10));
-        };
-        let value = clampRound((el.value !== undefined) ? Number(el.value) : (hasMin ? min : 0));
-
-        const item = document.createElement('div');
-        item.className = 'ctrl-item ctrl-slider flex';
-        if (el.label) {
-          const lbl = document.createElement('label');
-          lbl.textContent = el.label;
-          item.appendChild(lbl);
-        }
-
-        let widget = null;
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.className = 'ctrl-numinput';
-        if (hasMin) input.min = min;
-        if (hasMax) input.max = max;
-        input.step = step;
-        input.value = formatVal(value);
-
-        // fromDrag is true when the scalar control is being updated by a
-        // widget's own drag handler — in that case the widget already owns
-        // its visual state and setValue should not reset it.
-        const applyLocal = (v, fromDrag) => {
-          value = clampRound(v);
-          input.value = formatVal(value);
-          if (widget && widget.setValue) widget.setValue(value, !!fromDrag);
-        };
-        const commit = (v, fromDrag) => {
-          applyLocal(v, fromDrag);
-          sendCtrl({ type: 'control_slider', id: el.id, value: Number(value) });
-        };
-
-        const sensitivity = (el.sensitivity !== undefined && Number.isFinite(Number(el.sensitivity)))
-          ? Number(el.sensitivity)
-          : 1.0;
-        widget = renderWidget({
-          min, max, step, initial: value,
-          commit, applyLocal,
-          sensitivity, hasMin, hasMax,
-          color: el.color,
-        });
-        if (widget && widget.node) item.appendChild(widget.node);
-
-        const minusBtn = document.createElement('button');
-        minusBtn.type = 'button';
-        minusBtn.className = 'ctrl-nudgebtn';
-        minusBtn.textContent = '\u2212';
-        minusBtn.title = `\u2212 ${step}`;
-        minusBtn.addEventListener('click', () => commit(value - step));
-        item.appendChild(minusBtn);
-
-        input.addEventListener('change', () => {
-          const v = Number(input.value);
-          if (!Number.isFinite(v)) { input.value = formatVal(value); return; }
-          commit(v);
-        });
-        input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-        });
-        item.appendChild(input);
-
-        const plusBtn = document.createElement('button');
-        plusBtn.type = 'button';
-        plusBtn.className = 'ctrl-nudgebtn';
-        plusBtn.textContent = '+';
-        plusBtn.title = `+ ${step}`;
-        plusBtn.addEventListener('click', () => commit(value + step));
-        item.appendChild(plusBtn);
-
-        controlElements.sliders[el.id] = { setValue: (v) => applyLocal(v, false) };
-        if (fmt) controlElements.displayFormats[el.id] = fmt;
-        return item;
-      }
-
-      function buildSliderWidget({ min, max, step, initial, commit, applyLocal, hasMin, hasMax, color }) {
-        // HTML range inputs can't represent unbounded values, so fall back
-        // to sane defaults when the user omits min/max on a slider.
-        const rangeMin = hasMin ? min : 0;
-        const rangeMax = hasMax ? max : 1;
-        const range = document.createElement('input');
-        range.type = 'range';
-        range.className = 'ctrl-rangeinput';
-        range.min = rangeMin;
-        range.max = rangeMax;
-        if (color != null) range.style.accentColor = resolveColor(color);
-        range.step = step;
-        range.value = initial;
-        // Live preview: update the number box (and any other mirrors) on every
-        // drag tick, but only actually send the value to Python on release.
-        range.addEventListener('input', () => applyLocal(Number(range.value), true));
-        range.addEventListener('change', () => commit(Number(range.value), true));
-        return {
-          node: range,
-          setValue: (v, fromDrag) => { range.value = v; },
-        };
-      }
-
-      function buildDialWidget({ min, max, initial, commit, applyLocal, sensitivity, hasMin, hasMax, color }) {
-        const svgNS = 'http://www.w3.org/2000/svg';
-        const size = 100;
-        const svg = document.createElementNS(svgNS, 'svg');
-        svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
-        svg.setAttribute('width', size);
-        svg.setAttribute('height', size);
-        svg.classList.add('ctrl-dial');
-        const cx = size / 2, cy = size / 2, r = size / 2 - 8;
-
-        const track = document.createElementNS(svgNS, 'circle');
-        track.setAttribute('cx', cx);
-        track.setAttribute('cy', cy);
-        track.setAttribute('r', r);
-        track.classList.add('dial-track');
-        svg.appendChild(track);
-
-        // Up/down arrows as drag-direction hints, inside the circle at the
-        // 12 and 6 o'clock positions. Drawn as polygons (rather than text
-        // glyphs) so they scale with the SVG viewBox when the dial is
-        // resized via the `height` multiplier.
-        const mkArrow = (pointsUp, y) => {
-          const p = document.createElementNS(svgNS, 'polygon');
-          const w = 7, h = 6;
-          const pts = pointsUp
-            ? `${cx},${y - h / 2} ${cx - w / 2},${y + h / 2} ${cx + w / 2},${y + h / 2}`
-            : `${cx - w / 2},${y - h / 2} ${cx + w / 2},${y - h / 2} ${cx},${y + h / 2}`;
-          p.setAttribute('points', pts);
-          p.classList.add('dial-arrow');
-          return p;
-        };
-        svg.appendChild(mkArrow(true,  cy - r + 9));
-        svg.appendChild(mkArrow(false, cy + r - 9));
-
-        const indicator = document.createElementNS(svgNS, 'line');
-        indicator.classList.add('dial-indicator');
-        if (color != null) indicator.style.stroke = resolveColor(color);
-        svg.appendChild(indicator);
-
-        // Unified rotation math: the indicator advances by 2π radians for
-        // every `valuePerRotation` units of value change, in either
-        // direction. Hardstops fall out naturally — when value clamps,
-        // the per-tick delta is 0 and the indicator stops. sensitivity
-        // sets how much of the value range one rotation covers:
-        //   bounded:   valuePerRotation = (max - min) * sensitivity
-        //              sensitivity=1    -> 1 rotation per range
-        //              sensitivity=0.2  -> 5 rotations per range
-        //   unbounded: valuePerRotation = sensitivity directly
-        //              (raw value units per rotation)
-        const bothBounded = hasMin && hasMax;
-        const refRange = bothBounded ? (max - min) : 1;
-        const valuePerRotation = refRange * sensitivity;
-        const PX_PER_ROTATION = 100;
-        const BASE_ANGLE = (-135 * Math.PI) / 180;
-
-        let currentValue = initial;
-        let currentAngle = BASE_ANGLE;
-
-        function drawIndicator() {
-          const x2 = cx + (r - 4) * Math.sin(currentAngle);
-          const y2 = cy - (r - 4) * Math.cos(currentAngle);
-          indicator.setAttribute('x1', cx);
-          indicator.setAttribute('y1', cy);
-          indicator.setAttribute('x2', x2);
-          indicator.setAttribute('y2', y2);
-        }
-        drawIndicator();
-
-        // Vertical drag: drag up = value increases. 100 px of drag =
-        // one full indicator rotation = valuePerRotation units of value
-        // change. When value is pinned at a hardstop, delta = 0 and the
-        // indicator stops too.
-        svg.addEventListener('pointerdown', (e) => {
-          const startY = e.clientY;
-          const startV = currentValue;
-          svg.classList.add('ctrl-dial-dragging');
-
-          const onMove = (em) => {
-            const dy = startY - em.clientY;  // positive when dragging up
-            const target = startV + (dy / PX_PER_ROTATION) * valuePerRotation;
-            applyLocal(target, true);
-          };
-          const onUp = () => {
-            document.removeEventListener('pointermove', onMove);
-            document.removeEventListener('pointerup', onUp);
-            svg.classList.remove('ctrl-dial-dragging');
-            commit(currentValue, true);
-          };
-          document.addEventListener('pointermove', onMove);
-          document.addEventListener('pointerup', onUp, { once: true });
-          try { svg.setPointerCapture(e.pointerId); } catch (err) {}
-          e.preventDefault();
-        });
-
-        return {
-          node: svg,
-          setValue: (v, fromDrag) => {
-            if (fromDrag) {
-              // Incremental update during a drag: rotate the indicator by
-              // the delta since the last set, which implicitly pins it
-              // when value clamps at a hardstop.
-              const delta = v - currentValue;
-              currentAngle += (delta / valuePerRotation) * 2 * Math.PI;
-            } else {
-              // External update (e.g. seeded server value on reconnect):
-              // snap back to the base angle so we have a known starting
-              // point for the next drag.
-              currentAngle = BASE_ANGLE;
-            }
-            currentValue = v;
-            drawIndicator();
-          },
-        };
-      }
-
-      function buildControlElement(el) {
-        const item = document.createElement('div');
-        item.className = 'ctrl-item';
-        if (el.type === 'button') {
-          const b = document.createElement('button');
-          b.className = 'ctrl-btn';
-          b.textContent = el.label || el.id;
-          if (el.color != null) {
-            const c = resolveColor(el.color);
-            b.style.backgroundColor = c;
-            b.style.borderColor = c;
-            b.classList.add('ctrl-btn-colored');
-          }
-          b.addEventListener('click', () => sendCtrl({ type: 'control_button', id: el.id }));
-          item.appendChild(b);
-        } else if (el.type === 'slider') {
-          return makeScalarControl(el, buildSliderWidget);
-        } else if (el.type === 'dial') {
-          return makeScalarControl(el, buildDialWidget);
-        } else if (el.type === 'display') {
-          item.classList.add('ctrl-display');
-          if (el.label) {
-            const lbl = document.createElement('label');
-            lbl.textContent = el.label;
-            item.appendChild(lbl);
-          }
-          const val = document.createElement('span');
-          val.className = 'ctrl-val';
-          val.textContent = '--';
-          item.appendChild(val);
-          controlElements.displays[el.id] = val;
-          controlElements.displayKinds[el.id] = 'numeric';
-          const fmt = parseDisplayFormat(el.format);
-          if (fmt) controlElements.displayFormats[el.id] = fmt;
-        } else if (el.type === 'text') {
-          item.classList.add('ctrl-text', 'flex');
-          if (el.label) {
-            const lbl = document.createElement('label');
-            lbl.textContent = el.label;
-            item.appendChild(lbl);
-          }
-          const val = document.createElement('span');
-          val.className = 'ctrl-val ctrl-textval';
-          val.textContent = el.value || '--';
-          item.appendChild(val);
-          controlElements.displays[el.id] = val;
-          controlElements.displayKinds[el.id] = 'text';
-        }
-        return item;
-      }
-
-      function applyElementSize(item, el) {
-        // height: per-element multiplier on the standard row height. Lets
-        // users declare e.g. `{"type":"button","height":2}` to get a bigger
-        // click target, or `{"type":"dial","height":2}` to get a bigger
-        // knob. Values other than 1 set a min-height on the wrapper and,
-        // for buttons, make the button stretch to fill it. For dials the
-        // nested SVG itself is resized so the knob actually grows.
-        const h = Number(el.height);
-        if (Number.isFinite(h) && h > 0 && h !== 1) {
-          item.style.minHeight = `calc(var(--ctrl-unit-h) * ${h})`;
-          if (h > 1) item.classList.add('ctrl-item-tall');
-          const dial = item.querySelector('.ctrl-dial');
-          if (dial) {
-            const base = Number(dial.getAttribute('width')) || 100;
-            const newSize = Math.round(base * h);
-            dial.setAttribute('width', newSize);
-            dial.setAttribute('height', newSize);
-          }
-        }
-      }
-
-      function buildControlRow(row) {
-        const div = document.createElement('div');
-        div.className = 'ctrl-row';
-        row.forEach(el => {
-          const item = buildControlElement(el);
-          applyElementSize(item, el);
-          div.appendChild(item);
-        });
-        return div;
-      }
-
-      function applySliderValues(values) {
-        if (!values) return;
-        for (const [id, val] of Object.entries(values)) {
-          const s = controlElements.sliders[id];
-          if (s && typeof s.setValue === 'function') s.setValue(val);
-        }
-      }
-
-      function applyDisplayValues(values) {
-        if (!values) return;
-        for (const [id, val] of Object.entries(values)) {
-          const node = controlElements.displays[id];
-          if (node) node.textContent = formatDisplay(id, val);
-        }
-      }
-
-      function destroyPlots() {
-        plots.forEach(p => { try { p.uplot.destroy(); } catch (e) {} });
-        plots = [];
-        plotsDiv.innerHTML = '';
-        totalTraces = 0;
-        controlElements.displays = {};
-        controlElements.displayFormats = {};
-        controlElements.displayKinds = {};
-        controlElements.sliders = {};
-      }
-
-      function buildOnePlot(pcfg, rowLayout, traceOffset) {
-        const xrange = pcfg.xrange || 200;
-        const xs = new Float64Array(xrange);
-        for (let i = 0; i < xrange; i++) xs[i] = i;
-
-        const traceCount = pcfg.names.length;
-        const colors = pcfg.colors || DEFAULT_COLORS;
-        const widths = pcfg.line_width || [];
-        const styles = pcfg.line_style || [];
-
-        const series = [{}];
-        for (let t = 0; t < traceCount; t++) {
-          const dash = (styles[t] === '-') ? [10, 5] : null;
-          series.push({
-            label: pcfg.names[t],
-            stroke: resolveColor(colors[t]),
-            width: widths[t] || 1,
-            dash: dash || undefined,
-            points: { show: false },
-            spanGaps: true,
-          });
-        }
-
-        const baseHeight = rowLayout ? 260 : 320;
-        const heightMul = Number(pcfg.height);
-        const plotHeight = (Number.isFinite(heightMul) && heightMul > 0)
-          ? Math.round(baseHeight * heightMul)
-          : baseHeight;
-        const opts = {
-          width: Math.max(640, plotsDiv.clientWidth - 40),
-          height: plotHeight,
-          title: pcfg.title || '',
-          scales: {
-            x: { time: false, range: [0, xrange - 1] },
-            y: pcfg.yrange ? { range: [pcfg.yrange[0], pcfg.yrange[1]] } : {},
-          },
-          axes: [
-            { label: pcfg.xlabel || '' },
-            { label: pcfg.ylabel || '' },
-          ],
-          series: series,
-          legend: { show: true },
-          cursor: { drag: { x: false, y: false } },
-        };
-
-        const wrap = document.createElement('div');
-        wrap.className = 'plot-wrap';
-        plotsDiv.appendChild(wrap);
-
-        const buffers = [];
-        for (let t = 0; t < traceCount; t++) {
-          const buf = new Float32Array(xrange);
-          buf.fill(NaN);
-          buffers.push(buf);
-        }
-
-        const initialData = [xs];
-        for (let t = 0; t < traceCount; t++) initialData.push(buffers[t]);
-
-        const u = new uPlot(opts, initialData, wrap);
-        plots.push({
-          uplot: u,
-          xs: xs,
-          traceCount: traceCount,
-          startIdx: traceOffset,
-          xrange: xrange,
-          buffers: buffers,
-          height: opts.height,
-        });
-        return traceCount;
-      }
-
-      function buildPlots(cfg) {
-        destroyPlots();
-        plotsDiv.classList.toggle('row', cfg.row_layout);
-        plotsDiv.classList.toggle('col', !cfg.row_layout);
-
-        const controls = cfg.controls || [];
-        const layout = (cfg.layout && cfg.layout.length)
-          ? cfg.layout
-          : cfg.plots.map((_, idx) => ({ kind: 'plot', index: idx }))
-              .concat(controls.map((_, idx) => ({ kind: 'controls', index: idx })));
-
-        let traceOffset = 0;
-        layout.forEach(entry => {
-          if (entry.kind === 'plot') {
-            const pcfg = cfg.plots[entry.index];
-            if (!pcfg) return;
-            traceOffset += buildOnePlot(pcfg, cfg.row_layout, traceOffset);
-          } else if (entry.kind === 'controls') {
-            const row = controls[entry.index];
-            if (!row) return;
-            plotsDiv.appendChild(buildControlRow(row));
-          }
-        });
-        totalTraces = traceOffset;
-        applySliderValues(cfg.slider_values);
-        applyDisplayValues(cfg.display_values);
-        applyVisibleSamples();
-        scheduleRender();
-      }
-
-      // Track render-FPS with a 1-second moving window so the status bar
-      // can show both the data rate (from the server) and the actual
-      // browser repaint rate.
-      let renderFrameCount = 0;
-      let renderFpsLastCheck = performance.now();
-      let renderFps = 0;
-
-      let lastRenderTime = 0;
-      function _doRender() {
-        pendingFrame = false;
-        // Update the render-FPS counter every repaint.
-        renderFrameCount += 1;
-        const now = performance.now();
-        if (now - renderFpsLastCheck >= 1000) {
-          renderFps = renderFrameCount * 1000 / (now - renderFpsLastCheck);
-          renderFrameCount = 0;
-          renderFpsLastCheck = now;
-          lastStatus.dirty = true;
-        }
-        lastRenderTime = now;
-        plots.forEach(p => {
-          const data = [p.xs];
-          for (let t = 0; t < p.traceCount; t++) data.push(p.buffers[t]);
-          // Default resetScales=true so y-axis auto-fits when no yrange
-          // was supplied. With explicit yrange, uPlot pins the scale and
-          // this is essentially a no-op.
-          p.uplot.setData(data);
-        });
-        if (lastStatus.dirty) {
-          const peers = lastStatus.peers;
-          const peerText = peers === 1 ? '1 browser' : `${peers} browsers`;
-          const txt =
-            `Data ${lastStatus.fps.toFixed(0)} Hz  ·  Render ${renderFps.toFixed(0)} Hz` +
-            `  ·  ${peerText}` +
-            (lastStatus.nonPlot > 0 ? `  ·  non-plot ${lastStatus.nonPlot}` : '');
-          statusDiv.textContent = txt;
-          statusDiv.className = lastStatus.statusByte === 1 ? 'red' : 'green';
-          lastStatus.dirty = false;
-        }
-      }
-
-      function scheduleRender() {
-        if (pendingFrame) return;
-        pendingFrame = true;
-        requestAnimationFrame(() => {
-          // FPS cap: if the user set a maxFps in the hamburger menu and
-          // we're within 1000/maxFps ms of the last actual repaint,
-          // reschedule ourselves a bit later via setTimeout instead of
-          // running the render now. This spaces repaints out without
-          // losing any data (the ring buffers keep accumulating).
-          const cap = Number(settings.maxFps) || 0;
-          if (cap > 0) {
-            const minInterval = 1000 / cap;
-            const now = performance.now();
-            const wait = minInterval - (now - lastRenderTime);
-            if (wait > 1) {
-              pendingFrame = false;
-              setTimeout(scheduleRender, wait);
-              return;
-            }
-          }
-          _doRender();
-        });
-      }
-
-      function applyBinary(buf) {
-        if (!plots.length) return;
-        const view = new DataView(buf);
-        const msgType = view.getUint8(0);
-        const status = view.getUint8(1);
-        const nonPlot = view.getUint8(2);
-        const numTraces = view.getUint32(4, true);
-        const numSamples = view.getUint32(8, true);
-        const fps = view.getFloat32(12, true);
-        if (numTraces !== totalTraces || numSamples === 0) return;
-
-        // Float32Array view directly over the WS payload — no copy.
-        const data = new Float32Array(buf, HEADER_SIZE, numTraces * numSamples);
-
-        if (msgType === MSG_SNAPSHOT) {
-          plots.forEach(p => {
-            for (let t = 0; t < p.traceCount; t++) {
-              const traceRow = p.startIdx + t;
-              const offset = traceRow * numSamples;
-              const buf32 = p.buffers[t];
-              if (numSamples >= p.xrange) {
-                buf32.set(data.subarray(offset + numSamples - p.xrange, offset + numSamples));
-              } else {
-                buf32.fill(0);
-                buf32.set(data.subarray(offset, offset + numSamples), p.xrange - numSamples);
-              }
-            }
-          });
-        } else if (msgType === MSG_DELTA) {
-          const n = numSamples;
-          plots.forEach(p => {
-            for (let t = 0; t < p.traceCount; t++) {
-              const traceRow = p.startIdx + t;
-              const buf32 = p.buffers[t];
-              if (n < buf32.length) {
-                buf32.copyWithin(0, n);
-                const offset = traceRow * n;
-                buf32.set(data.subarray(offset, offset + n), buf32.length - n);
-              } else {
-                const offset = traceRow * n + (n - buf32.length);
-                buf32.set(data.subarray(offset, offset + buf32.length));
-              }
-            }
-          });
-        } else {
-          return;
-        }
-
-        if (lastStatus.fps !== fps || lastStatus.statusByte !== status || lastStatus.nonPlot !== nonPlot) {
-          lastStatus.fps = fps;
-          lastStatus.statusByte = status;
-          lastStatus.nonPlot = nonPlot;
-          lastStatus.dirty = true;
-        }
-        scheduleRender();
-      }
-
-      function setZmqMode(mode, target) {
-        if (mode === 'connect') {
-          zmqMode.textContent = `ZMQ → ${target}`;
-        } else if (mode === 'bind') {
-          zmqMode.textContent = `ZMQ bind ${target || '*:5555'}`;
-        } else {
-          zmqMode.textContent = 'ZMQ: --';
-        }
-        // Color-code the two mode buttons: the currently-active mode is
-        // green and non-clickable (clicking it again would be a no-op);
-        // the other is plain white and clickable so users can see at a
-        // glance which action is available.
-        bindBtn.classList.remove('zmq-active', 'zmq-disabled');
-        connectBtn.classList.remove('zmq-active', 'zmq-disabled');
-        if (mode === 'bind') {
-          bindBtn.classList.add('zmq-active');
-          // Clear the IP field so the user can type a fresh target
-          // without having to manually erase the old value.
-          ipInput.value = '';
-        } else if (mode === 'connect') {
-          connectBtn.classList.add('zmq-active');
-        }
-      }
-
-      function connect() {
-        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        socket = new WebSocket(proto + '//' + location.host + '/ws');
-        socket.binaryType = 'arraybuffer';
-        socket.onopen = () => { wsStatus.textContent = 'connected'; };
-        socket.onclose = () => {
-          wsStatus.textContent = 'disconnected, retrying...';
-          setTimeout(connect, 1000);
-        };
-        socket.onerror = () => { wsStatus.textContent = 'error'; };
-        socket.onmessage = (ev) => {
-          if (typeof ev.data === 'string') {
-            let msg;
-            try { msg = JSON.parse(ev.data); } catch (e) { return; }
-            if (msg.type === 'config') {
-              buildPlots(msg);
-            } else if (msg.type === 'zmq_status') {
-              setZmqMode(msg.mode, msg.target);
-              if (msg.mode === 'connect' && msg.target) {
-                ipInput.value = msg.target;
-              }
-            } else if (msg.type === 'display_update') {
-              applyDisplayValues(msg.values);
-            } else if (msg.type === 'peer_count') {
-              // Server broadcasts this whenever a browser connects or
-              // disconnects so every tab's status bar shows the same
-              // current count without needing to poll.
-              const n = Number(msg.count) || 0;
-              if (lastStatus.peers !== n) {
-                lastStatus.peers = n;
-                lastStatus.dirty = true;
-                scheduleRender();
-              }
-            }
-          } else {
-            applyBinary(ev.data);
-          }
-        };
-      }
-
-      connectBtn.addEventListener('click', () => {
-        // Already in connect mode — clicking again is a no-op unless
-        // the user has typed a DIFFERENT IP into the input.
-        const ip = ipInput.value.trim();
-        if (!ip) { ipInput.focus(); return; }
-        if (connectBtn.classList.contains('zmq-active')) {
-          // Allow re-connecting to a different host while already in
-          // connect mode (retarget). Fall through to send the message.
-        }
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: 'configure_ip', ip: ip }));
-        }
-      });
-
-      ipInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') connectBtn.click();
-      });
-
-      bindBtn.addEventListener('click', () => {
-        // Binding twice is a no-op; skip the WS round trip.
-        if (bindBtn.classList.contains('zmq-active')) return;
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: 'bind' }));
-        }
-      });
-
-      window.addEventListener('resize', () => {
-        plots.forEach(p => {
-          p.uplot.setSize({
-            width: Math.max(640, plotsDiv.clientWidth - 40),
-            height: p.height,
-          });
-        });
-      });
-
-      connect();
-    })();
-  </script>
-</body>
-</html>
-"""
+        # Decay the per-tab Hz estimate when a sender goes quiet so the
+        # panel doesn't show a stale reading forever.
+        now = perf_counter()
+        for t in tabs.values():
+            if t._last_rx_ts and (now - t._last_rx_ts) > 3.0:
+                t.data_rate_hz = 0.0
+        if _PSUTIL_AVAILABLE:
+            try:
+                cpu = psutil.cpu_percent(interval=None)
+                vm = psutil.virtual_memory()
+                msg["cpu"] = float(cpu)
+                msg["mem_used_mb"] = (vm.total - vm.available) / (1024 * 1024)
+                msg["mem_total_mb"] = vm.total / (1024 * 1024)
+            except Exception as exc:  # noqa: BLE001
+                msg["available"] = False
+                msg["error"] = str(exc)
+        await broadcast_text_all(msg)
 
 
-async def handle_index(request):
-    return web.Response(
-        text=INDEX_HTML,
-        content_type="text/html",
-        headers={"Cache-Control": "no-store, must-revalidate"},
+###############################
+# Tab lifecycle #
+###############################
+
+def _new_tab_id() -> str:
+    return "tab_" + uuid.uuid4().hex[:8]
+
+
+async def create_bind_me_tab():
+    t = Tab(
+        id=BIND_ME_ID,
+        name=BIND_ME_NAME,
+        mode="bind",
+        endpoint=f"*:{ZMQ_DEFAULT_PORT}",
     )
+    tabs[t.id] = t
+    _open_tab_sockets(t)
+    t.receiver_task = asyncio.create_task(zmq_receiver(t))
 
 
-# ------------------------------------------------------------------ snapshot
-# GET /snapshot.html returns a self-contained static HTML file that
-# reproduces the current plot visually without needing any server
-# connection. uPlot's JS + CSS are inlined, the visible buffer and
-# per-plot config are embedded as JSON, and a small bootstrap script
-# calls `new uPlot(opts, data, container)` on page load. Pass
-# ?animate=1 to also embed a setInterval loop that keeps scrolling
-# the data so the plot looks alive.
-#
-# Example scripts use this via client.save_snapshot("path.html"), so
-# they can commit a reproducible static preview alongside the code.
+async def create_connect_tab(
+    name: str, endpoint: str, *, tab_id: Optional[str] = None, persist: bool = True
+) -> Tab:
+    tid = tab_id or _new_tab_id()
+    label = endpoint
+    try:
+        _, label = _normalize_connect_target(endpoint)
+    except Exception:  # noqa: BLE001
+        pass
+    display_name = name.strip() or label
+    t = Tab(
+        id=tid,
+        name=display_name,
+        mode="connect",
+        endpoint=label,
+    )
+    tabs[t.id] = t
+    _open_tab_sockets(t)
+    t.receiver_task = asyncio.create_task(zmq_receiver(t))
+    if persist:
+        save_persisted_tabs()
+    await broadcast_tab_list()
+    return t
+
+
+async def delete_tab(tab_id: str):
+    if tab_id == BIND_ME_ID:
+        return
+    t = tabs.pop(tab_id, None)
+    if t is None:
+        return
+    await _cancel_task(t.receiver_task)
+    _close_tab_sockets(t)
+    # Move any viewers off this tab back to bind_me on the browser side;
+    # server tells them via tab_removed + they re-subscribe.
+    for ws in list(ws_tab.keys()):
+        if ws_tab.get(ws) == tab_id:
+            ws_tab[ws] = BIND_ME_ID
+    save_persisted_tabs()
+    await broadcast_text_all({"type": "tab_removed", "id": tab_id})
+
+
+async def rename_tab(tab_id: str, new_name: str):
+    if tab_id == BIND_ME_ID:
+        # bind_me is fixed; silently ignore.
+        return
+    t = tabs.get(tab_id)
+    if t is None:
+        return
+    t.name = new_name.strip() or t.endpoint
+    save_persisted_tabs()
+    await broadcast_tab(tab_id)
+
+
+###############################
+# HTTP / WebSocket handlers #
+###############################
 
 def _read_static_asset(name: str) -> str:
     here = os.path.dirname(os.path.abspath(__file__))
@@ -1736,14 +953,121 @@ def _read_static_asset(name: str) -> str:
         return fh.read()
 
 
-# Loaded once at module import so per-request cost is just JSON + format.
-try:
-    _UPLOT_JS = _read_static_asset("uPlot.iife.min.js")
-    _UPLOT_CSS = _read_static_asset("uPlot.min.css")
-except Exception as _exc:  # noqa: BLE001
-    _UPLOT_JS = f"/* uPlot load failed: {_exc} */"
-    _UPLOT_CSS = ""
+# Loaded once at import time so per-request cost is just the send.
+_INDEX_HTML = _read_static_asset("index.html")
 
+
+async def handle_index(request):
+    return web.Response(
+        text=_INDEX_HTML,
+        content_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
+
+async def handle_ws(request):
+    ws = web.WebSocketResponse(max_msg_size=0)
+    await ws.prepare(request)
+    ws_clients.add(ws)
+    ws_tab[ws] = BIND_ME_ID  # default until client sends tab_subscribe
+    await broadcast_peer_count()
+    try:
+        # Initial sync: tab list. The browser picks an active tab and
+        # sends a tab_subscribe; we respond with that tab's config.
+        await ws_send_text(ws, {"type": "tabs", "tabs": tabs_public()})
+
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                try:
+                    payload = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    continue
+                ptype = payload.get("type")
+
+                if ptype == "tab_subscribe":
+                    tid = payload.get("id")
+                    if not tid or tid not in tabs:
+                        continue
+                    ws_tab[ws] = tid
+                    t = tabs[tid]
+                    await ws_send_text(
+                        ws,
+                        {
+                            "type": "zmq_status",
+                            "mode": t.mode,
+                            "target": t.endpoint,
+                        },
+                    )
+                    if t.config_message is not None:
+                        await ws_send_text(ws, t.config_message)
+                        if t.display_values:
+                            await ws_send_text(
+                                ws,
+                                {
+                                    "type": "display_update",
+                                    "tab": t.id,
+                                    "values": dict(t.display_values),
+                                },
+                            )
+                        snap = make_snapshot_message(t)
+                        if snap is not None:
+                            await ws_send_bytes(ws, snap)
+                    else:
+                        await ws_send_text(
+                            ws, {"type": "no_config", "tab": t.id}
+                        )
+
+                elif ptype == "tab_create":
+                    name = str(payload.get("name", "")).strip()
+                    endpoint = str(payload.get("endpoint", "")).strip()
+                    if not endpoint:
+                        continue
+                    await create_connect_tab(name, endpoint)
+
+                elif ptype == "tab_rename":
+                    tid = payload.get("id")
+                    new_name = str(payload.get("name", "")).strip()
+                    if tid and new_name:
+                        await rename_tab(tid, new_name)
+
+                elif ptype == "tab_delete":
+                    tid = payload.get("id")
+                    if tid and tid != BIND_ME_ID:
+                        await delete_tab(tid)
+
+                elif ptype == "control_button":
+                    btn_id = payload.get("id")
+                    tid = ws_tab.get(ws, BIND_ME_ID)
+                    t = tabs.get(tid)
+                    if btn_id and t is not None:
+                        await send_control_event(
+                            t, {"type": "button", "id": btn_id}
+                        )
+
+                elif ptype == "control_slider":
+                    sid = payload.get("id")
+                    try:
+                        value = float(payload.get("value", 0.0))
+                    except (TypeError, ValueError):
+                        value = 0.0
+                    tid = ws_tab.get(ws, BIND_ME_ID)
+                    t = tabs.get(tid)
+                    if sid and t is not None:
+                        t.slider_values[sid] = value
+                        await send_control_event(
+                            t, {"type": "slider", "id": sid, "value": value}
+                        )
+            elif msg.type == WSMsgType.ERROR:
+                break
+    finally:
+        _remove_ws(ws)
+        await broadcast_peer_count()
+    return ws
+
+
+# ------------------------------------------------------------------ snapshot
+# GET /snapshot.html returns a self-contained static HTML file that
+# reproduces the currently active tab's plot visually.
 
 _SNAPSHOT_TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -1830,9 +1154,6 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
                  traceCount: traceCount, startIdx: traceOffset });
     traceOffset += traceCount;
   });
-  // Tier-2 animated replay: keep rolling the ring buffer so the plot
-  // looks "live". Disabled unless the /snapshot.html?animate=1 query
-  // was set at save time.
   if (SNAP.animate) {
     let phase = 0;
     setInterval(function () {
@@ -1866,27 +1187,32 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
 """
 
 
-def _build_snapshot_html(animate: bool) -> str:
-    """Serialize the current plot state into a static snapshot HTML document."""
-    # Determine the visible window in the ring buffer. If no data has
-    # arrived yet, return an "empty" snapshot with a helpful note.
-    li = state.get("li", 0)
-    num_points = state.get("num_datapoints_in_plot", DEFAULT_NUM_DATAPOINTS_IN_PLOT)
-    num_traces = state.get("num_traces", 0)
-    if num_traces == 0 or not state.get("initialized", False):
+try:
+    _UPLOT_JS = _read_static_asset("uPlot.iife.min.js")
+    _UPLOT_CSS = _read_static_asset("uPlot.min.css")
+except Exception as _exc:  # noqa: BLE001
+    _UPLOT_JS = f"/* uPlot load failed: {_exc} */"
+    _UPLOT_CSS = ""
+
+
+def _build_snapshot_html(tab: Tab, animate: bool) -> str:
+    """Serialize the given tab's plot state into a static snapshot."""
+    num_points = tab.num_datapoints_in_plot
+    num_traces = tab.num_traces
+    if num_traces == 0 or not tab.initialized or tab.buffer is None:
         return (
             "<!doctype html><html><body style='font-family:sans-serif;padding:32px'>"
             "<h1>rtplot snapshot</h1>"
-            "<p>No plot has been initialized yet — start your client and "
-            "call <code>initialize_plots()</code> first, then hit "
-            "<code>/snapshot.html</code> again.</p></body></html>"
+            f"<p>No plot has been initialized on tab <b>{tab.name}</b> yet"
+            " &mdash; start your client and call <code>initialize_plots()</code>"
+            " first, then hit <code>/snapshot.html</code> again.</p></body></html>"
         )
+    li = tab.li
     lo = max(0, li - num_points)
     hi = li
 
-    # Rebuild the per-plot configs from the OrderedDict the user sent.
     plots = []
-    cfg = state.get("config_dict") or OrderedDict()
+    cfg = tab.config_dict or OrderedDict()
     for key, plot_description in cfg.items():
         if "non_plot_labels" in plot_description or "controls" in plot_description:
             continue
@@ -1902,9 +1228,8 @@ def _build_snapshot_html(animate: bool) -> str:
             "yrange": plot_description.get("yrange"),
         })
 
-    # Extract the last `num_points` samples for each plotted trace.
     trace_data = []
-    arr = local_storage_buffer[:num_traces, lo:hi]
+    arr = tab.buffer[:num_traces, lo:hi]
     for i in range(num_traces):
         trace_data.append([float(v) for v in arr[i]])
 
@@ -1914,9 +1239,6 @@ def _build_snapshot_html(animate: bool) -> str:
         "trace_data": trace_data,
         "animate": bool(animate),
     }
-
-    # Use a placeholder-replace strategy instead of .format() so the
-    # uPlot minified JS's {} braces don't need to be escaped.
     html = _SNAPSHOT_TEMPLATE
     html = html.replace("__UPLOT_CSS__", _UPLOT_CSS)
     html = html.replace("__UPLOT_JS__", _UPLOT_JS)
@@ -1926,7 +1248,9 @@ def _build_snapshot_html(animate: bool) -> str:
 
 async def handle_snapshot(request):
     animate = request.query.get("animate") == "1"
-    html = _build_snapshot_html(animate=animate)
+    tid = request.query.get("tab") or BIND_ME_ID
+    t = tabs.get(tid) or tabs[BIND_ME_ID]
+    html = _build_snapshot_html(t, animate=animate)
     return web.Response(
         text=html,
         content_type="text/html",
@@ -1934,108 +1258,55 @@ async def handle_snapshot(request):
     )
 
 
-async def broadcast_peer_count():
-    """Tell every connected browser how many peers are currently connected.
-
-    Called whenever a browser joins or leaves so every tab's status bar
-    stays in sync without polling.
-    """
-    await broadcast_text({"type": "peer_count", "count": len(ws_clients)})
-
-
-async def handle_ws(request):
-    ws = web.WebSocketResponse(max_msg_size=0)
-    await ws.prepare(request)
-    ws_clients.add(ws)
-    # Let every browser (including this fresh one) see the new peer count.
-    await broadcast_peer_count()
-    try:
-        await ws.send_str(
-            json.dumps(
-                {
-                    "type": "zmq_status",
-                    "mode": zmq_status["mode"],
-                    "target": zmq_status["target"],
-                }
-            )
-        )
-        if state["config_message"] is not None:
-            await ws.send_str(json.dumps(state["config_message"]))
-            if state["display_values"]:
-                await ws.send_str(
-                    json.dumps(
-                        {
-                            "type": "display_update",
-                            "values": dict(state["display_values"]),
-                        }
-                    )
-                )
-            snap = make_snapshot_message()
-            if snap is not None:
-                await ws.send_bytes(snap)
-        async for msg in ws:
-            if msg.type == WSMsgType.TEXT:
-                try:
-                    payload = json.loads(msg.data)
-                except json.JSONDecodeError:
-                    continue
-                ptype = payload.get("type")
-                if ptype == "configure_ip":
-                    ip = payload.get("ip")
-                    if ip:
-                        try:
-                            await reconfigure_zmq(request.app, connect_ip=ip)
-                        except Exception as exc:  # noqa: BLE001
-                            print(f"[rtplot] configure_ip failed: {exc}")
-                elif ptype == "bind":
-                    try:
-                        await reconfigure_zmq(request.app, connect_ip=None)
-                    except Exception as exc:  # noqa: BLE001
-                        print(f"[rtplot] bind failed: {exc}")
-                elif ptype == "control_button":
-                    btn_id = payload.get("id")
-                    if btn_id:
-                        await send_control_event({"type": "button", "id": btn_id})
-                elif ptype == "control_slider":
-                    sid = payload.get("id")
-                    try:
-                        value = float(payload.get("value", 0.0))
-                    except (TypeError, ValueError):
-                        value = 0.0
-                    if sid:
-                        state["slider_values"][sid] = value
-                        await send_control_event(
-                            {"type": "slider", "id": sid, "value": value}
-                        )
-            elif msg.type == WSMsgType.ERROR:
-                break
-    finally:
-        ws_clients.discard(ws)
-        # Update everyone else's count now that this client has gone.
-        await broadcast_peer_count()
-    return ws
-
+###############################
+# Lifecycle #
+###############################
 
 async def on_startup(app):
-    app["zmq_task"] = asyncio.create_task(zmq_receiver())
+    await create_bind_me_tab()
+
+    # Persisted tabs (user-created connect tabs) from disk.
+    for entry in load_persisted_tabs():
+        try:
+            await create_connect_tab(
+                entry["name"], entry["endpoint"], tab_id=entry["id"], persist=False
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[rtplot] could not restore tab {entry.get('id')}: {exc}")
+
+    # -p CLI shortcut: spin up an ephemeral connect tab too.
+    if args.pi_ip:
+        label = args.pi_ip
+        try:
+            _, label = _normalize_connect_target(args.pi_ip)
+        except Exception:  # noqa: BLE001
+            pass
+        existing = next(
+            (
+                t for t in tabs.values()
+                if t.mode == "connect" and t.endpoint == label
+            ),
+            None,
+        )
+        if existing is None:
+            await create_connect_tab(f"CLI {label}", args.pi_ip, persist=False)
+
     app["ws_task"] = asyncio.create_task(ws_pusher())
     app["display_task"] = asyncio.create_task(display_pusher())
+    app["resources_task"] = asyncio.create_task(resources_pusher())
 
 
 async def on_cleanup(app):
-    for key in ("zmq_task", "ws_task", "display_task"):
-        task = app.get(key)
-        if task:
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+    for key in ("ws_task", "display_task", "resources_task"):
+        await _cancel_task(app.get(key))
+    for t in list(tabs.values()):
+        await _cancel_task(t.receiver_task)
+        _close_tab_sockets(t)
     for ws in list(ws_clients):
-        await ws.close()
-    zmq_socket.close(0)
-    if control_push_socket is not None:
-        control_push_socket.close(0)
+        try:
+            await ws.close()
+        except Exception:  # noqa: BLE001
+            pass
     zmq_ctx.term()
 
 
@@ -2078,10 +1349,7 @@ def main():
             "  (WSL detected: open the URL above in your Windows browser;"
             " if localhost doesn't work, use one of the LAN IPs)"
         )
-    # webbrowser.open() shells out to xdg-settings/xdg-open, which can hang
-    # indefinitely under WSL waiting on D-Bus. Skip it on WSL entirely, and
-    # always run it in a daemon thread so a stuck child can never block
-    # web.run_app from binding the HTTP port.
+    # webbrowser.open() can hang under WSL on xdg-open / D-Bus; skip there.
     if not args.no_browser and not is_wsl:
         import threading
 
@@ -2092,7 +1360,6 @@ def main():
                 pass
 
         threading.Thread(target=_open, daemon=True).start()
-    # Bind to 0.0.0.0 explicitly so WSL2 / LAN clients can reach us.
     web.run_app(app, host=args.host, port=args.port, print=None)
 
 

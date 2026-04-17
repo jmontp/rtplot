@@ -1,0 +1,1175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>rtplot</title>
+<link rel="stylesheet" href="/static/uPlot.min.css" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fafafa; color: #222; }
+
+  /* -------- Tab bar (top strip) -------- */
+  #tabbar { display: flex; align-items: stretch; gap: 2px; padding: 4px 8px 0 8px; background: #ececec; border-bottom: 1px solid #ccc; overflow-x: auto; }
+  .tab { display: flex; align-items: center; gap: 6px; padding: 6px 12px 7px 12px; background: #f4f4f4; border: 1px solid #cfcfcf; border-bottom: none; border-radius: 6px 6px 0 0; font-size: calc(13px * var(--ui-scale)); cursor: pointer; white-space: nowrap; position: relative; top: 1px; color: #444; user-select: none; }
+  .tab:hover { background: #fafafa; }
+  .tab.active { background: #fff; color: #111; border-color: #bbb; font-weight: 600; }
+  .tab .tab-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #bbb; flex: 0 0 auto; }
+  .tab .tab-dot.idle { background: #bbb; }
+  .tab .tab-dot.streaming { background: #2ebf4e; box-shadow: 0 0 3px rgba(46,191,78,0.5); }
+  .tab .tab-dot.error { background: #e05252; }
+  .tab .tab-dot.connecting { background: #e8b13a; animation: pulse 1s ease-in-out infinite alternate; }
+  @keyframes pulse { from { opacity: 0.5; } to { opacity: 1.0; } }
+  .tab .tab-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  .tab .tab-name-input { border: 1px solid #2a5db0; border-radius: 3px; padding: 1px 4px; font: inherit; color: #111; width: 160px; }
+  .tab .tab-rename { font-size: calc(11px * var(--ui-scale)); color: #888; cursor: pointer; padding: 1px 4px; border-radius: 2px; opacity: 0.0; }
+  .tab:hover .tab-rename { opacity: 1.0; }
+  .tab .tab-rename:hover { background: #e0e0e0; color: #333; }
+  .tab .tab-close { font-size: calc(15px * var(--ui-scale)); color: #888; cursor: pointer; padding: 0 4px; border-radius: 2px; opacity: 0.0; line-height: 1; }
+  .tab:hover .tab-close { opacity: 0.8; }
+  .tab .tab-close:hover { background: #e0c0c0; color: #a11; opacity: 1.0; }
+  .tab.bind-me { background: #e8edf5; border-color: #b3c2dd; color: #2a4a80; }
+  .tab.bind-me.active { background: #fff; color: #1d3566; }
+  .tab-add { border: 1px dashed #bbb; background: transparent; color: #555; cursor: pointer; padding: 6px 12px; border-radius: 6px 6px 0 0; font-size: calc(13px * var(--ui-scale)); white-space: nowrap; }
+  .tab-add:hover { background: #f5f5f5; color: #222; border-color: #888; }
+  .tab-error-msg { color: #a11; font-size: calc(11px * var(--ui-scale)); margin-left: 6px; }
+
+  /* Inline form to create a new device tab */
+  #tab-create { display: none; gap: 6px; align-items: center; padding: 4px 10px 5px 10px; background: #fff; border: 1px solid #bbb; border-bottom: none; border-radius: 6px 6px 0 0; position: relative; top: 1px; }
+  #tab-create.open { display: flex; }
+  #tab-create input { font: inherit; font-size: calc(12px * var(--ui-scale)); padding: 3px 6px; border: 1px solid #bbb; border-radius: 3px; }
+  #tab-create .name-in { width: 120px; }
+  #tab-create .ep-in { width: 160px; font-family: monospace; }
+  #tab-create button { font-size: calc(12px * var(--ui-scale)); padding: 3px 10px; }
+
+  /* -------- Header row (existing) -------- */
+  #header { display: flex; align-items: center; gap: 16px; padding: 8px 16px; background: #fff; border-bottom: 1px solid #ddd; position: sticky; top: 0; z-index: 10; }
+  #header h1 { margin: 0; font-size: calc(18px * var(--ui-scale)); font-weight: 600; }
+  #status { font-size: calc(14px * var(--ui-scale)); padding: 4px 10px; border-radius: 4px; background: #eee; }
+  #status.green { background: #d4f5d4; color: #186a18; }
+  #status.red { background: #f9d4d4; color: #8a1a1a; }
+  .btn { padding: 6px 12px; font-size: calc(14px * var(--ui-scale)); border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; }
+  .btn:hover { background: #f0f0f0; }
+  #zmq-mode { font-size: calc(12px * var(--ui-scale)); color: #555; padding: 2px 8px; background: #eef; border-radius: 4px; }
+  #ws-status { font-size: calc(12px * var(--ui-scale)); color: #666; margin-left: auto; }
+
+  /* -------- Plots + controls (existing) -------- */
+  #plots { display: flex; padding: 12px; gap: 12px; }
+  #plots.row { flex-direction: column; }
+  #plots.col { flex-direction: row; flex-wrap: wrap; }
+  .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; flex: 1 1 auto; min-width: 320px; }
+  .plot-title { font-size: 13px; font-weight: 600; margin: 0 0 4px 4px; color: #333; }
+  #empty-state { padding: 28px 32px; color: #888; font-size: calc(14px * var(--ui-scale)); font-style: italic; }
+  :root { --ctrl-unit-h: 38px; --ui-scale: 1; }
+  .ctrl-row { display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: #fff; border: 1px solid #ddd; border-radius: 4px; flex-wrap: wrap; }
+  .ctrl-item { display: flex; align-items: center; gap: 6px; }
+  .ctrl-item.flex { flex: 1 1 220px; min-width: 200px; }
+  .ctrl-item label { font-size: calc(13px * var(--ui-scale)); color: #444; }
+  .ctrl-btn { padding: 8px 16px; font-size: calc(14px * var(--ui-scale)); border: 1px solid #888; background: #fff; cursor: pointer; border-radius: 4px; font-weight: 500; display: flex; align-items: center; justify-content: center; }
+  .ctrl-item-tall > .ctrl-btn { align-self: stretch; padding-top: 0; padding-bottom: 0; font-size: calc(16px * var(--ui-scale)); }
+  .ctrl-item-tall > .ctrl-rangeinput,
+  .ctrl-item-tall > .ctrl-dial,
+  .ctrl-item-tall > .ctrl-numinput,
+  .ctrl-item-tall > .ctrl-nudgebtn,
+  .ctrl-item-tall > .ctrl-val { align-self: center; }
+  .ctrl-btn:hover { background: #f0f0f0; }
+  .ctrl-btn:active { background: #e2e2e2; }
+  .ctrl-btn-colored:hover { filter: brightness(0.93); }
+  .ctrl-btn-colored:active { filter: brightness(0.85); }
+  .ctrl-slider .ctrl-rangeinput { flex: 1; min-width: 120px; }
+  .ctrl-numinput { width: 72px; font-family: monospace; font-size: calc(13px * var(--ui-scale)); padding: 4px 6px; border: 1px solid #b8b8b8; border-radius: 3px; background: #fff; color: #222; text-align: right; -moz-appearance: textfield; }
+  .ctrl-numinput::-webkit-outer-spin-button,
+  .ctrl-numinput::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .ctrl-nudgebtn { width: 26px; height: 26px; font-size: calc(15px * var(--ui-scale)); font-weight: 600; line-height: 1; padding: 0; border: 1px solid #b8b8b8; background: #f7f7f7; color: #333; cursor: pointer; border-radius: 3px; }
+  .ctrl-nudgebtn:hover { background: #e9e9e9; }
+  .ctrl-nudgebtn:active { background: #dcdcdc; }
+  .ctrl-dial { cursor: ns-resize; flex: 0 0 auto; touch-action: none; user-select: none; }
+  .ctrl-dial-dragging { cursor: ns-resize; }
+  .ctrl-dial .dial-track { fill: #fafafa; stroke: #bcbcbc; stroke-width: 2.5; }
+  .ctrl-dial .dial-indicator { stroke: #2a5db0; stroke-width: 4; stroke-linecap: round; }
+  .ctrl-dial .dial-arrow { fill: #c0c0c0; pointer-events: none; user-select: none; }
+  .ctrl-dial:hover .dial-track { stroke: #888; }
+  .ctrl-dial:hover .dial-arrow { fill: #888; }
+  .ctrl-val { font-family: monospace; font-size: calc(13px * var(--ui-scale)); min-width: 56px; text-align: right; color: #222; }
+  .ctrl-display .ctrl-val { background: #f3f3f3; padding: 4px 10px; border-radius: 3px; min-width: 72px; border: 1px solid #e2e2e2; }
+  .ctrl-textval { background: #eef3ff; padding: 6px 12px; border-radius: 3px; border: 1px solid #c8d6ff; color: #1a3a7a; text-align: left; min-width: 160px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: calc(14px * var(--ui-scale)); }
+
+  /* -------- Hamburger menu (existing + new resources section) -------- */
+  #menu-btn { margin-left: 8px; width: 34px; height: 34px; padding: 0; font-size: calc(18px * var(--ui-scale)); line-height: 1; display: flex; align-items: center; justify-content: center; }
+  #menu-panel { position: fixed; top: 56px; right: 16px; background: #fff; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.12); padding: 16px 18px; min-width: 280px; z-index: 20; display: none; }
+  #menu-panel.open { display: block; }
+  #menu-panel h2 { margin: 0 0 10px 0; font-size: calc(14px * var(--ui-scale)); font-weight: 600; color: #333; text-transform: uppercase; letter-spacing: 0.03em; }
+  #menu-panel h2:not(:first-child) { margin-top: 16px; border-top: 1px solid #eee; padding-top: 14px; }
+  #menu-panel .menu-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+  #menu-panel .menu-row:last-child { margin-bottom: 0; }
+  #menu-panel label { font-size: calc(12px * var(--ui-scale)); color: #555; font-weight: 500; }
+  #menu-panel .menu-ctrl { display: flex; align-items: center; gap: 8px; }
+  #menu-panel input[type=range] { flex: 1; }
+  #menu-panel input[type=number] { width: 88px; font-family: monospace; font-size: calc(13px * var(--ui-scale)); padding: 4px 6px; border: 1px solid #b8b8b8; border-radius: 3px; text-align: right; -moz-appearance: textfield; }
+  #menu-panel input[type=number]::-webkit-outer-spin-button,
+  #menu-panel input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  #menu-panel .menu-val { font-family: monospace; font-size: calc(12px * var(--ui-scale)); min-width: 44px; text-align: right; color: #333; }
+  #menu-panel .menu-hint { font-size: calc(11px * var(--ui-scale)); color: #888; margin-top: 2px; }
+  #menu-panel .menu-reset { margin-top: 6px; font-size: calc(11px * var(--ui-scale)); background: transparent; border: none; color: #2a5db0; cursor: pointer; padding: 2px 0; text-align: left; }
+  #menu-panel .menu-reset:hover { text-decoration: underline; }
+  /* Resources panel */
+  .res-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: calc(12px * var(--ui-scale)); }
+  .res-row .res-label { flex: 0 0 70px; color: #555; }
+  .res-row .res-bar { flex: 1; height: 10px; background: #eee; border-radius: 3px; overflow: hidden; position: relative; }
+  .res-row .res-bar-fill { height: 100%; background: #6cc86c; transition: width 0.25s ease-out, background 0.25s; }
+  .res-row .res-bar-fill.warn { background: #e0b642; }
+  .res-row .res-bar-fill.crit { background: #d24a4a; }
+  .res-row .res-text { flex: 0 0 auto; color: #222; font-family: monospace; min-width: 88px; text-align: right; }
+  .res-stats { font-size: calc(11px * var(--ui-scale)); color: #666; margin-top: 6px; font-family: monospace; line-height: 1.5; }
+  .res-stats .rs-tab { display: flex; justify-content: space-between; gap: 8px; }
+  .res-stats .rs-tab .rs-name { color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .res-stats .rs-tab .rs-hz { color: #2a5db0; font-weight: 500; }
+  .res-unavail { font-size: calc(11px * var(--ui-scale)); color: #999; font-style: italic; }
+</style>
+</head>
+<body>
+  <div id="tabbar"></div>
+  <div id="tab-create">
+    <input class="name-in" type="text" placeholder="Display name" />
+    <input class="ep-in" type="text" placeholder="host:port" />
+    <button class="btn tab-create-ok" type="button">Add</button>
+    <button class="btn tab-create-cancel" type="button">Cancel</button>
+  </div>
+  <div id="header">
+    <h1>rtplot</h1>
+    <div id="status" class="green">Rate: -- Hz</div>
+    <div id="zmq-mode">ZMQ: --</div>
+    <div id="ws-status">connecting...</div>
+    <button id="menu-btn" class="btn" title="Settings" aria-label="Settings">&#9776;</button>
+  </div>
+  <div id="menu-panel" aria-hidden="true">
+    <h2>Settings</h2>
+    <div class="menu-row">
+      <label for="menu-font">UI font scale</label>
+      <div class="menu-ctrl">
+        <input id="menu-font" type="range" min="0.7" max="2.0" step="0.05" value="1" />
+        <span id="menu-font-val" class="menu-val">1.00x</span>
+      </div>
+    </div>
+    <div class="menu-row">
+      <label for="menu-xrange">Visible samples per plot</label>
+      <div class="menu-ctrl">
+        <input id="menu-xrange" type="number" min="10" step="10" placeholder="auto" />
+        <span class="menu-val">samples</span>
+      </div>
+    </div>
+    <div class="menu-row">
+      <label for="menu-maxfps">Max plot refresh rate</label>
+      <div class="menu-ctrl">
+        <input id="menu-maxfps" type="number" min="1" step="1" placeholder="auto" />
+        <span class="menu-val">Hz</span>
+      </div>
+      <div id="menu-monitor-hint" class="menu-hint">Monitor: measuring&hellip;</div>
+    </div>
+    <button id="menu-reset" class="menu-reset" type="button">Reset to defaults</button>
+
+    <h2>Server resources</h2>
+    <div id="res-body">
+      <div class="res-row"><div class="res-label">CPU</div><div class="res-bar"><div id="res-cpu-bar" class="res-bar-fill" style="width: 0%"></div></div><div id="res-cpu-text" class="res-text">-- %</div></div>
+      <div class="res-row"><div class="res-label">Memory</div><div class="res-bar"><div id="res-mem-bar" class="res-bar-fill" style="width: 0%"></div></div><div id="res-mem-text" class="res-text">-- MB</div></div>
+      <div class="res-stats">
+        <div class="rs-tab"><span>Tabs</span><span id="res-tab-count">0</span></div>
+        <div class="rs-tab"><span>Viewers</span><span id="res-viewer-count">0</span></div>
+        <div id="res-tab-rates" style="margin-top: 4px;"></div>
+      </div>
+      <div id="res-unavail" class="res-unavail" style="display:none;">psutil not installed &mdash; pip install psutil for live stats</div>
+    </div>
+  </div>
+  <div id="plots" class="row"></div>
+  <script src="/static/uPlot.iife.min.js"></script>
+  <script>
+    (function () {
+      const COLOR_MAP = {
+        r: 'rgb(255,0,0)', g: 'rgb(0,200,0)', b: 'rgb(0,0,255)',
+        c: 'rgb(0,200,200)', m: 'rgb(200,0,200)', y: 'rgb(200,200,0)',
+        k: 'rgb(0,0,0)', w: 'rgb(255,255,255)'
+      };
+      const DEFAULT_COLORS = ['r', 'g', 'b', 'c', 'm', 'y'];
+
+      function resolveColor(c) {
+        if (c == null) return 'rgb(0,0,0)';
+        if (Array.isArray(c) && c.length >= 3) return `rgb(${c[0]},${c[1]},${c[2]})`;
+        if (typeof c === 'string') {
+          if (COLOR_MAP[c]) return COLOR_MAP[c];
+          return c;
+        }
+        return 'rgb(0,0,0)';
+      }
+
+      const plotsDiv = document.getElementById('plots');
+      const statusDiv = document.getElementById('status');
+      const wsStatus = document.getElementById('ws-status');
+      const zmqMode = document.getElementById('zmq-mode');
+      const menuBtn = document.getElementById('menu-btn');
+      const menuPanel = document.getElementById('menu-panel');
+      const menuFontInput = document.getElementById('menu-font');
+      const menuFontVal = document.getElementById('menu-font-val');
+      const menuXrangeInput = document.getElementById('menu-xrange');
+      const menuMaxfpsInput = document.getElementById('menu-maxfps');
+      const menuMonitorHint = document.getElementById('menu-monitor-hint');
+      const menuResetBtn = document.getElementById('menu-reset');
+      const tabbar = document.getElementById('tabbar');
+      const tabCreate = document.getElementById('tab-create');
+      const tabCreateName = tabCreate.querySelector('.name-in');
+      const tabCreateEp = tabCreate.querySelector('.ep-in');
+      const tabCreateOk = tabCreate.querySelector('.tab-create-ok');
+      const tabCreateCancel = tabCreate.querySelector('.tab-create-cancel');
+      const resCpuBar = document.getElementById('res-cpu-bar');
+      const resCpuText = document.getElementById('res-cpu-text');
+      const resMemBar = document.getElementById('res-mem-bar');
+      const resMemText = document.getElementById('res-mem-text');
+      const resTabCount = document.getElementById('res-tab-count');
+      const resViewerCount = document.getElementById('res-viewer-count');
+      const resTabRates = document.getElementById('res-tab-rates');
+      const resUnavail = document.getElementById('res-unavail');
+
+      // ---- Detect the monitor's refresh rate on page load ----
+      let monitorHz = 0;
+      (function measureMonitorHz() {
+        let count = 0;
+        let start = 0;
+        function tick(t) {
+          if (start === 0) start = t;
+          count += 1;
+          const elapsed = t - start;
+          if (elapsed < 500) {
+            requestAnimationFrame(tick);
+          } else {
+            const measured = count * 1000 / elapsed;
+            const common = [30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240];
+            let best = measured;
+            let bestDiff = Infinity;
+            for (const c of common) {
+              const d = Math.abs(measured - c);
+              if (d < bestDiff && d / c < 0.05) { bestDiff = d; best = c; }
+            }
+            monitorHz = Math.round(best);
+            if (menuMonitorHint) {
+              menuMonitorHint.textContent = `Monitor: ${monitorHz} Hz (rAF cap)`;
+            }
+            menuMaxfpsInput.placeholder = `auto = ${monitorHz}`;
+          }
+        }
+        requestAnimationFrame(tick);
+      })();
+
+      // ---- Persistent client-side settings ----
+      const SETTINGS_KEY = 'rtplotSettings.v1';
+      const ACTIVE_TAB_KEY = 'rtplotActiveTab.v1';
+      const DEFAULT_SETTINGS = { fontScale: 1.0, visibleSamples: null, maxFps: null };
+      let settings = Object.assign({}, DEFAULT_SETTINGS);
+      try {
+        const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+        settings = Object.assign(settings, saved);
+      } catch (e) {}
+      function saveSettings() {
+        try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+      }
+      function applyFontScale() {
+        const s = Number(settings.fontScale) || 1;
+        document.documentElement.style.setProperty('--ui-scale', s);
+        menuFontInput.value = s;
+        menuFontVal.textContent = s.toFixed(2) + 'x';
+      }
+      function applyVisibleSamples() {
+        const n = settings.visibleSamples;
+        plots.forEach(p => {
+          let lo = 0, hi = p.xrange - 1;
+          if (n && Number.isFinite(n) && n > 0 && n < p.xrange) {
+            lo = p.xrange - n;
+          }
+          try { p.uplot.setScale('x', { min: lo, max: hi }); } catch (e) {}
+        });
+      }
+      function syncMenuInputs() {
+        menuFontInput.value = Number(settings.fontScale) || 1;
+        menuFontVal.textContent = (Number(settings.fontScale) || 1).toFixed(2) + 'x';
+        menuXrangeInput.value = settings.visibleSamples || '';
+        menuMaxfpsInput.value = settings.maxFps || '';
+      }
+      menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menuPanel.classList.toggle('open');
+      });
+      document.addEventListener('click', (e) => {
+        if (!menuPanel.classList.contains('open')) return;
+        if (menuPanel.contains(e.target) || menuBtn.contains(e.target)) return;
+        menuPanel.classList.remove('open');
+      });
+      menuFontInput.addEventListener('input', () => {
+        settings.fontScale = Number(menuFontInput.value);
+        applyFontScale();
+        saveSettings();
+      });
+      menuXrangeInput.addEventListener('change', () => {
+        const v = Number(menuXrangeInput.value);
+        settings.visibleSamples = (Number.isFinite(v) && v > 0) ? v : null;
+        applyVisibleSamples();
+        saveSettings();
+      });
+      menuMaxfpsInput.addEventListener('change', () => {
+        const v = Number(menuMaxfpsInput.value);
+        settings.maxFps = (Number.isFinite(v) && v > 0) ? v : null;
+        saveSettings();
+      });
+      menuResetBtn.addEventListener('click', () => {
+        settings = Object.assign({}, DEFAULT_SETTINGS);
+        saveSettings();
+        syncMenuInputs();
+        applyFontScale();
+        applyVisibleSamples();
+      });
+      applyFontScale();
+      syncMenuInputs();
+
+      const HEADER_SIZE = 16;
+      const MSG_SNAPSHOT = 0;
+      const MSG_DELTA = 1;
+
+      // ---- Tab state ----
+      // knownTabs: full server-reported tab list, keyed by id.
+      // activeTab: tab id this browser is currently viewing. null until first tabs msg.
+      let knownTabs = {};
+      let activeTab = null;
+      try { activeTab = localStorage.getItem(ACTIVE_TAB_KEY); } catch (e) {}
+
+      // ---- Plot state (per-active-tab in the DOM) ----
+      let plots = [];
+      let totalTraces = 0;
+      let socket = null;
+      let pendingFrame = false;
+      let lastStatus = { fps: 0, statusByte: 0, nonPlot: 0, peers: 0, dirty: true };
+      const controlElements = { displays: {}, displayFormats: {}, displayKinds: {}, sliders: {} };
+
+      function sendCtrl(msg) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify(msg));
+        }
+      }
+
+      function parseDisplayFormat(fmt) {
+        if (typeof fmt !== 'string') return null;
+        const m = fmt.match(/\{:\.(\d+)f\}/);
+        if (m) return { kind: 'fixed', digits: parseInt(m[1], 10) };
+        return null;
+      }
+
+      function formatDisplay(id, value) {
+        if (value === null || value === undefined) return '--';
+        if (controlElements.displayKinds[id] === 'text') return String(value);
+        if (typeof value === 'string') return value;
+        if (Number.isNaN(value)) return '--';
+        const fmt = controlElements.displayFormats[id];
+        if (fmt && fmt.kind === 'fixed') return Number(value).toFixed(fmt.digits);
+        return String(value);
+      }
+
+      function makeScalarControl(el, renderWidget) {
+        const hasMin = el.min !== undefined && Number.isFinite(Number(el.min));
+        const hasMax = el.max !== undefined && Number.isFinite(Number(el.max));
+        const min = hasMin ? Number(el.min) : -Infinity;
+        const max = hasMax ? Number(el.max) : Infinity;
+        const step = (el.step !== undefined && Number(el.step) > 0) ? Number(el.step) : 0.01;
+        const fmt = parseDisplayFormat(el.format);
+        const formatVal = (v) => (fmt && fmt.kind === 'fixed')
+          ? Number(v).toFixed(fmt.digits)
+          : String(v);
+        const clampRound = (v) => {
+          v = Math.max(min, Math.min(max, Number(v)));
+          const base = hasMin ? min : 0;
+          const snapped = Math.round((v - base) / step) * step + base;
+          return Number(snapped.toFixed(10));
+        };
+        let value = clampRound((el.value !== undefined) ? Number(el.value) : (hasMin ? min : 0));
+
+        const item = document.createElement('div');
+        item.className = 'ctrl-item ctrl-slider flex';
+        if (el.label) {
+          const lbl = document.createElement('label');
+          lbl.textContent = el.label;
+          item.appendChild(lbl);
+        }
+
+        let widget = null;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.className = 'ctrl-numinput';
+        if (hasMin) input.min = min;
+        if (hasMax) input.max = max;
+        input.step = step;
+        input.value = formatVal(value);
+
+        const applyLocal = (v, fromDrag) => {
+          value = clampRound(v);
+          input.value = formatVal(value);
+          if (widget && widget.setValue) widget.setValue(value, !!fromDrag);
+        };
+        const commit = (v, fromDrag) => {
+          applyLocal(v, fromDrag);
+          sendCtrl({ type: 'control_slider', id: el.id, value: Number(value) });
+        };
+
+        const sensitivity = (el.sensitivity !== undefined && Number.isFinite(Number(el.sensitivity)))
+          ? Number(el.sensitivity)
+          : 1.0;
+        widget = renderWidget({
+          min, max, step, initial: value,
+          commit, applyLocal,
+          sensitivity, hasMin, hasMax,
+          color: el.color,
+        });
+        if (widget && widget.node) item.appendChild(widget.node);
+
+        const minusBtn = document.createElement('button');
+        minusBtn.type = 'button';
+        minusBtn.className = 'ctrl-nudgebtn';
+        minusBtn.textContent = '\u2212';
+        minusBtn.title = `\u2212 ${step}`;
+        minusBtn.addEventListener('click', () => commit(value - step));
+        item.appendChild(minusBtn);
+
+        input.addEventListener('change', () => {
+          const v = Number(input.value);
+          if (!Number.isFinite(v)) { input.value = formatVal(value); return; }
+          commit(v);
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        });
+        item.appendChild(input);
+
+        const plusBtn = document.createElement('button');
+        plusBtn.type = 'button';
+        plusBtn.className = 'ctrl-nudgebtn';
+        plusBtn.textContent = '+';
+        plusBtn.title = `+ ${step}`;
+        plusBtn.addEventListener('click', () => commit(value + step));
+        item.appendChild(plusBtn);
+
+        controlElements.sliders[el.id] = { setValue: (v) => applyLocal(v, false) };
+        if (fmt) controlElements.displayFormats[el.id] = fmt;
+        return item;
+      }
+
+      function buildSliderWidget({ min, max, step, initial, commit, applyLocal, hasMin, hasMax, color }) {
+        const rangeMin = hasMin ? min : 0;
+        const rangeMax = hasMax ? max : 1;
+        const range = document.createElement('input');
+        range.type = 'range';
+        range.className = 'ctrl-rangeinput';
+        range.min = rangeMin;
+        range.max = rangeMax;
+        if (color != null) range.style.accentColor = resolveColor(color);
+        range.step = step;
+        range.value = initial;
+        range.addEventListener('input', () => applyLocal(Number(range.value), true));
+        range.addEventListener('change', () => commit(Number(range.value), true));
+        return {
+          node: range,
+          setValue: (v, fromDrag) => { range.value = v; },
+        };
+      }
+
+      function buildDialWidget({ min, max, initial, commit, applyLocal, sensitivity, hasMin, hasMax, color }) {
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const size = 100;
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', `0 0 ${size} ${size}`);
+        svg.setAttribute('width', size);
+        svg.setAttribute('height', size);
+        svg.classList.add('ctrl-dial');
+        const cx = size / 2, cy = size / 2, r = size / 2 - 8;
+
+        const track = document.createElementNS(svgNS, 'circle');
+        track.setAttribute('cx', cx);
+        track.setAttribute('cy', cy);
+        track.setAttribute('r', r);
+        track.classList.add('dial-track');
+        svg.appendChild(track);
+
+        const mkArrow = (pointsUp, y) => {
+          const p = document.createElementNS(svgNS, 'polygon');
+          const w = 7, h = 6;
+          const pts = pointsUp
+            ? `${cx},${y - h / 2} ${cx - w / 2},${y + h / 2} ${cx + w / 2},${y + h / 2}`
+            : `${cx - w / 2},${y - h / 2} ${cx + w / 2},${y - h / 2} ${cx},${y + h / 2}`;
+          p.setAttribute('points', pts);
+          p.classList.add('dial-arrow');
+          return p;
+        };
+        svg.appendChild(mkArrow(true,  cy - r + 9));
+        svg.appendChild(mkArrow(false, cy + r - 9));
+
+        const indicator = document.createElementNS(svgNS, 'line');
+        indicator.classList.add('dial-indicator');
+        if (color != null) indicator.style.stroke = resolveColor(color);
+        svg.appendChild(indicator);
+
+        const bothBounded = hasMin && hasMax;
+        const refRange = bothBounded ? (max - min) : 1;
+        const valuePerRotation = refRange * sensitivity;
+        const PX_PER_ROTATION = 100;
+        const BASE_ANGLE = (-135 * Math.PI) / 180;
+
+        let currentValue = initial;
+        let currentAngle = BASE_ANGLE;
+
+        function drawIndicator() {
+          const x2 = cx + (r - 4) * Math.sin(currentAngle);
+          const y2 = cy - (r - 4) * Math.cos(currentAngle);
+          indicator.setAttribute('x1', cx);
+          indicator.setAttribute('y1', cy);
+          indicator.setAttribute('x2', x2);
+          indicator.setAttribute('y2', y2);
+        }
+        drawIndicator();
+
+        svg.addEventListener('pointerdown', (e) => {
+          const startY = e.clientY;
+          const startV = currentValue;
+          svg.classList.add('ctrl-dial-dragging');
+
+          const onMove = (em) => {
+            const dy = startY - em.clientY;
+            const target = startV + (dy / PX_PER_ROTATION) * valuePerRotation;
+            applyLocal(target, true);
+          };
+          const onUp = () => {
+            document.removeEventListener('pointermove', onMove);
+            document.removeEventListener('pointerup', onUp);
+            svg.classList.remove('ctrl-dial-dragging');
+            commit(currentValue, true);
+          };
+          document.addEventListener('pointermove', onMove);
+          document.addEventListener('pointerup', onUp, { once: true });
+          try { svg.setPointerCapture(e.pointerId); } catch (err) {}
+          e.preventDefault();
+        });
+
+        return {
+          node: svg,
+          setValue: (v, fromDrag) => {
+            if (fromDrag) {
+              const delta = v - currentValue;
+              currentAngle += (delta / valuePerRotation) * 2 * Math.PI;
+            } else {
+              currentAngle = BASE_ANGLE;
+            }
+            currentValue = v;
+            drawIndicator();
+          },
+        };
+      }
+
+      function buildControlElement(el) {
+        const item = document.createElement('div');
+        item.className = 'ctrl-item';
+        if (el.type === 'button') {
+          const b = document.createElement('button');
+          b.className = 'ctrl-btn';
+          b.textContent = el.label || el.id;
+          if (el.color != null) {
+            const c = resolveColor(el.color);
+            b.style.backgroundColor = c;
+            b.style.borderColor = c;
+            b.classList.add('ctrl-btn-colored');
+          }
+          b.addEventListener('click', () => sendCtrl({ type: 'control_button', id: el.id }));
+          item.appendChild(b);
+        } else if (el.type === 'slider') {
+          return makeScalarControl(el, buildSliderWidget);
+        } else if (el.type === 'dial') {
+          return makeScalarControl(el, buildDialWidget);
+        } else if (el.type === 'display') {
+          item.classList.add('ctrl-display');
+          if (el.label) {
+            const lbl = document.createElement('label');
+            lbl.textContent = el.label;
+            item.appendChild(lbl);
+          }
+          const val = document.createElement('span');
+          val.className = 'ctrl-val';
+          val.textContent = '--';
+          item.appendChild(val);
+          controlElements.displays[el.id] = val;
+          controlElements.displayKinds[el.id] = 'numeric';
+          const fmt = parseDisplayFormat(el.format);
+          if (fmt) controlElements.displayFormats[el.id] = fmt;
+        } else if (el.type === 'text') {
+          item.classList.add('ctrl-text', 'flex');
+          if (el.label) {
+            const lbl = document.createElement('label');
+            lbl.textContent = el.label;
+            item.appendChild(lbl);
+          }
+          const val = document.createElement('span');
+          val.className = 'ctrl-val ctrl-textval';
+          val.textContent = el.value || '--';
+          item.appendChild(val);
+          controlElements.displays[el.id] = val;
+          controlElements.displayKinds[el.id] = 'text';
+        }
+        return item;
+      }
+
+      function applyElementSize(item, el) {
+        const h = Number(el.height);
+        if (Number.isFinite(h) && h > 0 && h !== 1) {
+          item.style.minHeight = `calc(var(--ctrl-unit-h) * ${h})`;
+          if (h > 1) item.classList.add('ctrl-item-tall');
+          const dial = item.querySelector('.ctrl-dial');
+          if (dial) {
+            const base = Number(dial.getAttribute('width')) || 100;
+            const newSize = Math.round(base * h);
+            dial.setAttribute('width', newSize);
+            dial.setAttribute('height', newSize);
+          }
+        }
+      }
+
+      function buildControlRow(row) {
+        const div = document.createElement('div');
+        div.className = 'ctrl-row';
+        row.forEach(el => {
+          const item = buildControlElement(el);
+          applyElementSize(item, el);
+          div.appendChild(item);
+        });
+        return div;
+      }
+
+      function applySliderValues(values) {
+        if (!values) return;
+        for (const [id, val] of Object.entries(values)) {
+          const s = controlElements.sliders[id];
+          if (s && typeof s.setValue === 'function') s.setValue(val);
+        }
+      }
+
+      function applyDisplayValues(values) {
+        if (!values) return;
+        for (const [id, val] of Object.entries(values)) {
+          const node = controlElements.displays[id];
+          if (node) node.textContent = formatDisplay(id, val);
+        }
+      }
+
+      function destroyPlots() {
+        plots.forEach(p => { try { p.uplot.destroy(); } catch (e) {} });
+        plots = [];
+        plotsDiv.innerHTML = '';
+        totalTraces = 0;
+        controlElements.displays = {};
+        controlElements.displayFormats = {};
+        controlElements.displayKinds = {};
+        controlElements.sliders = {};
+      }
+
+      function showEmptyState(text) {
+        destroyPlots();
+        const d = document.createElement('div');
+        d.id = 'empty-state';
+        d.textContent = text;
+        plotsDiv.appendChild(d);
+      }
+
+      function buildOnePlot(pcfg, rowLayout, traceOffset) {
+        const xrange = pcfg.xrange || 200;
+        const xs = new Float64Array(xrange);
+        for (let i = 0; i < xrange; i++) xs[i] = i;
+
+        const traceCount = pcfg.names.length;
+        const colors = pcfg.colors || DEFAULT_COLORS;
+        const widths = pcfg.line_width || [];
+        const styles = pcfg.line_style || [];
+
+        const series = [{}];
+        for (let t = 0; t < traceCount; t++) {
+          const dash = (styles[t] === '-') ? [10, 5] : null;
+          series.push({
+            label: pcfg.names[t],
+            stroke: resolveColor(colors[t]),
+            width: widths[t] || 1,
+            dash: dash || undefined,
+            points: { show: false },
+            spanGaps: true,
+          });
+        }
+
+        const baseHeight = rowLayout ? 260 : 320;
+        const heightMul = Number(pcfg.height);
+        const plotHeight = (Number.isFinite(heightMul) && heightMul > 0)
+          ? Math.round(baseHeight * heightMul)
+          : baseHeight;
+        const opts = {
+          width: Math.max(640, plotsDiv.clientWidth - 40),
+          height: plotHeight,
+          title: pcfg.title || '',
+          scales: {
+            x: { time: false, range: [0, xrange - 1] },
+            y: pcfg.yrange ? { range: [pcfg.yrange[0], pcfg.yrange[1]] } : {},
+          },
+          axes: [
+            { label: pcfg.xlabel || '' },
+            { label: pcfg.ylabel || '' },
+          ],
+          series: series,
+          legend: { show: true },
+          cursor: { drag: { x: false, y: false } },
+        };
+
+        const wrap = document.createElement('div');
+        wrap.className = 'plot-wrap';
+        plotsDiv.appendChild(wrap);
+
+        const buffers = [];
+        for (let t = 0; t < traceCount; t++) {
+          const buf = new Float32Array(xrange);
+          buf.fill(NaN);
+          buffers.push(buf);
+        }
+
+        const initialData = [xs];
+        for (let t = 0; t < traceCount; t++) initialData.push(buffers[t]);
+
+        const u = new uPlot(opts, initialData, wrap);
+        plots.push({
+          uplot: u,
+          xs: xs,
+          traceCount: traceCount,
+          startIdx: traceOffset,
+          xrange: xrange,
+          buffers: buffers,
+          height: opts.height,
+        });
+        return traceCount;
+      }
+
+      function buildPlots(cfg) {
+        destroyPlots();
+        plotsDiv.classList.toggle('row', cfg.row_layout);
+        plotsDiv.classList.toggle('col', !cfg.row_layout);
+
+        const controls = cfg.controls || [];
+        const layout = (cfg.layout && cfg.layout.length)
+          ? cfg.layout
+          : cfg.plots.map((_, idx) => ({ kind: 'plot', index: idx }))
+              .concat(controls.map((_, idx) => ({ kind: 'controls', index: idx })));
+
+        let traceOffset = 0;
+        layout.forEach(entry => {
+          if (entry.kind === 'plot') {
+            const pcfg = cfg.plots[entry.index];
+            if (!pcfg) return;
+            traceOffset += buildOnePlot(pcfg, cfg.row_layout, traceOffset);
+          } else if (entry.kind === 'controls') {
+            const row = controls[entry.index];
+            if (!row) return;
+            plotsDiv.appendChild(buildControlRow(row));
+          }
+        });
+        totalTraces = traceOffset;
+        applySliderValues(cfg.slider_values);
+        applyDisplayValues(cfg.display_values);
+        applyVisibleSamples();
+        scheduleRender();
+      }
+
+      let renderFrameCount = 0;
+      let renderFpsLastCheck = performance.now();
+      let renderFps = 0;
+
+      let lastRenderTime = 0;
+      function _doRender() {
+        pendingFrame = false;
+        renderFrameCount += 1;
+        const now = performance.now();
+        if (now - renderFpsLastCheck >= 1000) {
+          renderFps = renderFrameCount * 1000 / (now - renderFpsLastCheck);
+          renderFrameCount = 0;
+          renderFpsLastCheck = now;
+          lastStatus.dirty = true;
+        }
+        lastRenderTime = now;
+        plots.forEach(p => {
+          const data = [p.xs];
+          for (let t = 0; t < p.traceCount; t++) data.push(p.buffers[t]);
+          p.uplot.setData(data);
+        });
+        if (lastStatus.dirty) {
+          const peers = lastStatus.peers;
+          const peerText = peers === 1 ? '1 viewer' : `${peers} viewers`;
+          const txt =
+            `Data ${lastStatus.fps.toFixed(0)} Hz  \u00B7  Render ${renderFps.toFixed(0)} Hz` +
+            `  \u00B7  ${peerText}` +
+            (lastStatus.nonPlot > 0 ? `  \u00B7  non-plot ${lastStatus.nonPlot}` : '');
+          statusDiv.textContent = txt;
+          statusDiv.className = lastStatus.statusByte === 1 ? 'red' : 'green';
+          lastStatus.dirty = false;
+        }
+      }
+
+      function scheduleRender() {
+        if (pendingFrame) return;
+        pendingFrame = true;
+        requestAnimationFrame(() => {
+          const cap = Number(settings.maxFps) || 0;
+          if (cap > 0) {
+            const minInterval = 1000 / cap;
+            const now = performance.now();
+            const wait = minInterval - (now - lastRenderTime);
+            if (wait > 1) {
+              pendingFrame = false;
+              setTimeout(scheduleRender, wait);
+              return;
+            }
+          }
+          _doRender();
+        });
+      }
+
+      function applyBinary(buf) {
+        if (!plots.length) return;
+        const view = new DataView(buf);
+        const msgType = view.getUint8(0);
+        const status = view.getUint8(1);
+        const nonPlot = view.getUint8(2);
+        const numTraces = view.getUint32(4, true);
+        const numSamples = view.getUint32(8, true);
+        const fps = view.getFloat32(12, true);
+        if (numTraces !== totalTraces || numSamples === 0) return;
+
+        const data = new Float32Array(buf, HEADER_SIZE, numTraces * numSamples);
+
+        if (msgType === MSG_SNAPSHOT) {
+          plots.forEach(p => {
+            for (let t = 0; t < p.traceCount; t++) {
+              const traceRow = p.startIdx + t;
+              const offset = traceRow * numSamples;
+              const buf32 = p.buffers[t];
+              if (numSamples >= p.xrange) {
+                buf32.set(data.subarray(offset + numSamples - p.xrange, offset + numSamples));
+              } else {
+                buf32.fill(0);
+                buf32.set(data.subarray(offset, offset + numSamples), p.xrange - numSamples);
+              }
+            }
+          });
+        } else if (msgType === MSG_DELTA) {
+          const n = numSamples;
+          plots.forEach(p => {
+            for (let t = 0; t < p.traceCount; t++) {
+              const traceRow = p.startIdx + t;
+              const buf32 = p.buffers[t];
+              if (n < buf32.length) {
+                buf32.copyWithin(0, n);
+                const offset = traceRow * n;
+                buf32.set(data.subarray(offset, offset + n), buf32.length - n);
+              } else {
+                const offset = traceRow * n + (n - buf32.length);
+                buf32.set(data.subarray(offset, offset + buf32.length));
+              }
+            }
+          });
+        } else {
+          return;
+        }
+
+        if (lastStatus.fps !== fps || lastStatus.statusByte !== status || lastStatus.nonPlot !== nonPlot) {
+          lastStatus.fps = fps;
+          lastStatus.statusByte = status;
+          lastStatus.nonPlot = nonPlot;
+          lastStatus.dirty = true;
+        }
+        scheduleRender();
+      }
+
+      function setZmqMode(mode, target) {
+        if (mode === 'connect') {
+          zmqMode.textContent = `ZMQ \u2192 ${target}`;
+        } else if (mode === 'bind') {
+          zmqMode.textContent = `ZMQ bind ${target || '*:5555'}`;
+        } else {
+          zmqMode.textContent = 'ZMQ: --';
+        }
+      }
+
+      // ---- Tab bar rendering ----
+      function renderTabs() {
+        tabbar.innerHTML = '';
+        // Stable order: bind_me first, then others in insertion order.
+        const order = ['bind_me'].concat(
+          Object.keys(knownTabs).filter(id => id !== 'bind_me')
+        );
+        order.forEach(id => {
+          const t = knownTabs[id];
+          if (!t) return;
+          const el = document.createElement('div');
+          el.className = 'tab' + (id === activeTab ? ' active' : '') + (id === 'bind_me' ? ' bind-me' : '');
+          el.dataset.tabId = id;
+
+          const dot = document.createElement('span');
+          dot.className = 'tab-dot ' + (t.status || 'idle');
+          if (t.error) dot.title = t.error;
+          el.appendChild(dot);
+
+          const name = document.createElement('span');
+          name.className = 'tab-name';
+          name.textContent = t.name || id;
+          el.appendChild(name);
+
+          if (id !== 'bind_me') {
+            const ren = document.createElement('span');
+            ren.className = 'tab-rename';
+            ren.textContent = '\u270E';
+            ren.title = 'Rename';
+            ren.addEventListener('click', (e) => { e.stopPropagation(); beginRename(el, id, t.name); });
+            el.appendChild(ren);
+
+            const close = document.createElement('span');
+            close.className = 'tab-close';
+            close.textContent = '\u00D7';
+            close.title = 'Close tab';
+            close.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (confirm(`Close tab "${t.name || id}"?`)) {
+                sendCtrl({ type: 'tab_delete', id: id });
+              }
+            });
+            el.appendChild(close);
+          }
+
+          if (t.status === 'error' && t.error) {
+            const em = document.createElement('span');
+            em.className = 'tab-error-msg';
+            em.textContent = `(${t.error})`;
+            el.appendChild(em);
+          }
+
+          el.addEventListener('click', () => {
+            if (id !== activeTab) switchTab(id);
+          });
+          // Double-click on non-bind_me tab name also triggers rename.
+          if (id !== 'bind_me') {
+            name.addEventListener('dblclick', (e) => {
+              e.stopPropagation();
+              beginRename(el, id, t.name);
+            });
+          }
+          tabbar.appendChild(el);
+        });
+
+        // "+ add" button
+        const add = document.createElement('button');
+        add.className = 'tab-add';
+        add.textContent = '+ new device';
+        add.title = 'Add a tab that connects to a remote device';
+        add.addEventListener('click', openCreateForm);
+        tabbar.appendChild(add);
+      }
+
+      function beginRename(tabEl, id, currentName) {
+        const nameSpan = tabEl.querySelector('.tab-name');
+        if (!nameSpan) return;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'tab-name-input';
+        input.value = currentName || '';
+        nameSpan.replaceWith(input);
+        input.focus();
+        input.select();
+        const commit = () => {
+          const newName = input.value.trim();
+          if (newName && newName !== currentName) {
+            sendCtrl({ type: 'tab_rename', id: id, name: newName });
+          } else {
+            // Put back the original so we don't strand the DOM if server is slow.
+            const span = document.createElement('span');
+            span.className = 'tab-name';
+            span.textContent = currentName || '';
+            input.replaceWith(span);
+          }
+        };
+        const cancel = () => {
+          const span = document.createElement('span');
+          span.className = 'tab-name';
+          span.textContent = currentName || '';
+          input.replaceWith(span);
+        };
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+        });
+        input.addEventListener('blur', commit);
+      }
+
+      function openCreateForm() {
+        tabCreate.classList.add('open');
+        tabCreateName.value = '';
+        tabCreateEp.value = '';
+        tabCreateEp.focus();
+      }
+      function closeCreateForm() {
+        tabCreate.classList.remove('open');
+      }
+      function submitCreateForm() {
+        const name = tabCreateName.value.trim();
+        const ep = tabCreateEp.value.trim();
+        if (!ep) { tabCreateEp.focus(); return; }
+        sendCtrl({ type: 'tab_create', name: name, endpoint: ep });
+        closeCreateForm();
+      }
+      tabCreateOk.addEventListener('click', submitCreateForm);
+      tabCreateCancel.addEventListener('click', closeCreateForm);
+      tabCreateEp.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitCreateForm(); if (e.key === 'Escape') closeCreateForm(); });
+      tabCreateName.addEventListener('keydown', (e) => { if (e.key === 'Enter') submitCreateForm(); if (e.key === 'Escape') closeCreateForm(); });
+
+      function switchTab(id) {
+        if (!(id in knownTabs)) return;
+        activeTab = id;
+        try { localStorage.setItem(ACTIVE_TAB_KEY, id); } catch (e) {}
+        renderTabs();
+        // Clear the plot area until the server pushes this tab's config.
+        showEmptyState('Loading tab \u2026');
+        const t = knownTabs[id];
+        setZmqMode(t.mode, t.endpoint);
+        sendCtrl({ type: 'tab_subscribe', id: id });
+      }
+
+      // ---- Resources panel ----
+      function applyResources(msg) {
+        if (!msg.available) {
+          resUnavail.style.display = '';
+          resCpuBar.style.width = '0%';
+          resCpuText.textContent = '-- %';
+          resMemBar.style.width = '0%';
+          resMemText.textContent = '-- MB';
+        } else {
+          resUnavail.style.display = 'none';
+          const cpu = Number(msg.cpu) || 0;
+          resCpuBar.style.width = Math.max(0, Math.min(100, cpu)) + '%';
+          resCpuBar.className = 'res-bar-fill' + (cpu >= 90 ? ' crit' : cpu >= 70 ? ' warn' : '');
+          resCpuText.textContent = cpu.toFixed(0) + ' %';
+          const memUsed = Number(msg.mem_used_mb) || 0;
+          const memTotal = Number(msg.mem_total_mb) || 0;
+          const memPct = memTotal > 0 ? (memUsed / memTotal) * 100 : 0;
+          resMemBar.style.width = Math.max(0, Math.min(100, memPct)) + '%';
+          resMemBar.className = 'res-bar-fill' + (memPct >= 90 ? ' crit' : memPct >= 70 ? ' warn' : '');
+          resMemText.textContent = `${memUsed.toFixed(0)} / ${memTotal.toFixed(0)} MB`;
+        }
+        resTabCount.textContent = String(msg.tabs || 0);
+        resViewerCount.textContent = String(msg.viewers || 0);
+        // Per-tab Hz breakdown.
+        resTabRates.innerHTML = '';
+        const rates = msg.rates || {};
+        Object.keys(rates).forEach(id => {
+          const row = document.createElement('div');
+          row.className = 'rs-tab';
+          const nameEl = document.createElement('span');
+          nameEl.className = 'rs-name';
+          const t = knownTabs[id];
+          nameEl.textContent = (t && t.name) ? t.name : id;
+          const hzEl = document.createElement('span');
+          hzEl.className = 'rs-hz';
+          hzEl.textContent = Number(rates[id]).toFixed(0) + ' Hz';
+          row.appendChild(nameEl);
+          row.appendChild(hzEl);
+          resTabRates.appendChild(row);
+        });
+      }
+
+      function connect() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        socket = new WebSocket(proto + '//' + location.host + '/ws');
+        socket.binaryType = 'arraybuffer';
+        socket.onopen = () => { wsStatus.textContent = 'connected'; };
+        socket.onclose = () => {
+          wsStatus.textContent = 'disconnected, retrying...';
+          setTimeout(connect, 1000);
+        };
+        socket.onerror = () => { wsStatus.textContent = 'error'; };
+        socket.onmessage = (ev) => {
+          if (typeof ev.data === 'string') {
+            let msg;
+            try { msg = JSON.parse(ev.data); } catch (e) { return; }
+            if (msg.type === 'tabs') {
+              knownTabs = {};
+              (msg.tabs || []).forEach(t => { knownTabs[t.id] = t; });
+              // Pick active tab: stored preference if it still exists,
+              // otherwise first tab (bind_me).
+              if (!activeTab || !(activeTab in knownTabs)) {
+                activeTab = msg.tabs && msg.tabs.length ? msg.tabs[0].id : null;
+                try { if (activeTab) localStorage.setItem(ACTIVE_TAB_KEY, activeTab); } catch (e) {}
+              }
+              renderTabs();
+              if (activeTab) {
+                const t = knownTabs[activeTab];
+                setZmqMode(t.mode, t.endpoint);
+                sendCtrl({ type: 'tab_subscribe', id: activeTab });
+                showEmptyState('Loading tab \u2026');
+              }
+            } else if (msg.type === 'tab') {
+              // Single-tab status or name update.
+              if (msg.tab && msg.tab.id) {
+                knownTabs[msg.tab.id] = msg.tab;
+                renderTabs();
+                if (msg.tab.id === activeTab) {
+                  setZmqMode(msg.tab.mode, msg.tab.endpoint);
+                }
+              }
+            } else if (msg.type === 'tab_removed') {
+              delete knownTabs[msg.id];
+              if (activeTab === msg.id) {
+                // Fall back to bind_me.
+                activeTab = 'bind_me';
+                try { localStorage.setItem(ACTIVE_TAB_KEY, activeTab); } catch (e) {}
+                sendCtrl({ type: 'tab_subscribe', id: activeTab });
+                showEmptyState('Loading tab \u2026');
+              }
+              renderTabs();
+            } else if (msg.type === 'config') {
+              if (msg.tab && msg.tab !== activeTab) return;
+              buildPlots(msg);
+            } else if (msg.type === 'no_config') {
+              if (msg.tab && msg.tab !== activeTab) return;
+              const t = knownTabs[msg.tab];
+              const tname = (t && t.name) || msg.tab || 'this tab';
+              showEmptyState(`Waiting for the sender on "${tname}" to call initialize_plots()\u2026`);
+            } else if (msg.type === 'zmq_status') {
+              setZmqMode(msg.mode, msg.target);
+            } else if (msg.type === 'display_update') {
+              if (msg.tab && msg.tab !== activeTab) return;
+              applyDisplayValues(msg.values);
+            } else if (msg.type === 'peer_count') {
+              const n = Number(msg.count) || 0;
+              if (lastStatus.peers !== n) {
+                lastStatus.peers = n;
+                lastStatus.dirty = true;
+                scheduleRender();
+              }
+            } else if (msg.type === 'resources') {
+              applyResources(msg);
+            }
+          } else {
+            applyBinary(ev.data);
+          }
+        };
+      }
+
+      window.addEventListener('resize', () => {
+        plots.forEach(p => {
+          p.uplot.setSize({
+            width: Math.max(640, plotsDiv.clientWidth - 40),
+            height: p.height,
+          });
+        });
+      });
+
+      connect();
+    })();
+  </script>
+</body>
+</html>
