@@ -68,6 +68,10 @@ def _settings_path():
 DEFAULT_SETTINGS = {
     # Most recent demo-sender targets, newest first, capped at 8.
     "recent_hosts": [],
+    # Optional shared password that gates the browser UI. Empty string
+    # means "no auth". Stored in plaintext alongside the exe — the
+    # threat model is LAN convenience, not cryptographic secrecy.
+    "password": "",
 }
 
 MAX_RECENT_HOSTS = 8
@@ -222,8 +226,29 @@ def _parse_wrapper_args(argv):
             "machine that only has the exe (no Python install)."
         ),
     )
+    parser.add_argument(
+        "--password",
+        default=None,
+        help=(
+            "Gate the UI behind a shared password (HTTP login page). "
+            "Overrides the password saved by the GUI's settings file. "
+            "Leave unset to use the saved password (or no auth if none "
+            "has been set)."
+        ),
+    )
     args, rest = parser.parse_known_args(argv)
     return args, rest
+
+
+def _resolve_password(args) -> str:
+    """Return the effective password: CLI flag wins, else saved setting.
+
+    Empty string means "no auth"; anything else gates the UI.
+    """
+    if args.password is not None:
+        return args.password
+    settings = _load_settings()
+    return settings.get("password", "") or ""
 
 
 def _run_headless(args, rest):
@@ -233,6 +258,9 @@ def _run_headless(args, rest):
     forwarded = [sys.argv[0], "--port", str(args.port), "--host", args.host]
     if args.pi_ip:
         forwarded += ["-p", args.pi_ip]
+    pw = _resolve_password(args)
+    if pw:
+        forwarded += ["--password", pw]
     forwarded += rest
     sys.argv = forwarded
     runpy.run_module("rtplot.server_browser", run_name="__main__")
@@ -397,6 +425,11 @@ def _run_with_gui(args, rest):
 
     settings = _load_settings()
 
+    # Password resolution order: CLI flag > saved setting > none. Whatever
+    # wins is forwarded to server_browser via --password so the server's
+    # auth middleware picks it up at import time.
+    effective_password = _resolve_password(args)
+
     # Seed sys.argv so server_browser's module-level argparse sees what we
     # want. --no-browser is always forced in GUI mode because the window
     # has its own "Open in browser" button.
@@ -410,6 +443,8 @@ def _run_with_gui(args, rest):
     ]
     if args.pi_ip:
         forwarded += ["-p", args.pi_ip]
+    if effective_password:
+        forwarded += ["--password", effective_password]
     forwarded += rest
     sys.argv = forwarded
 
@@ -589,6 +624,13 @@ def _run_with_gui(args, rest):
         text="Open this address in any browser to see your plots:",
         style="Subhead.TLabel",
     ).pack(anchor="w", pady=(4, 10))
+
+    if effective_password:
+        ttk.Label(
+            main,
+            text="\U0001F512  Password protection is on \u2014 viewers need the shared password.",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(0, 8))
 
     # ---- Big URL display (clickable, copy-able) ----
     url = f"http://localhost:{args.port}"
@@ -854,6 +896,124 @@ def _run_with_gui(args, rest):
         root.after(250, poll_demo_stats)
 
     poll_demo_stats()
+
+    # --- Access control sub-section ---
+    ttk.Separator(advanced_frame, orient="horizontal").pack(fill="x", pady=(14, 10))
+    ttk.Label(
+        advanced_frame, text="Access control", style="Section.TLabel"
+    ).pack(anchor="w")
+    ttk.Label(
+        advanced_frame,
+        text=(
+            "Set a shared password so the browser UI asks anyone on the\n"
+            "network to sign in before they can see your plots."
+        ),
+        style="Help.TLabel",
+    ).pack(anchor="w", pady=(2, 6))
+
+    pw_state_var = tk.StringVar()
+    pw_restart_note_var = tk.StringVar(value="")
+
+    def _refresh_pw_state():
+        if effective_password:
+            pw_state_var.set("\U0001F512  Password is set")
+        else:
+            pw_state_var.set("No password (UI is open to anyone who can reach it)")
+
+    _refresh_pw_state()
+    ttk.Label(advanced_frame, textvariable=pw_state_var, style="Muted.TLabel").pack(
+        anchor="w"
+    )
+
+    def _open_password_dialog():
+        dlg = tk.Toplevel(root)
+        dlg.title("Set password")
+        dlg.transient(root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        try:
+            dlg.configure(bg=BG)
+        except tk.TclError:
+            pass
+
+        body = ttk.Frame(dlg, padding=18)
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(
+            body,
+            text="Shared password",
+            style="Section.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            body,
+            text=(
+                "Everyone who opens the rtplot page will be asked for this\n"
+                "password. Leave blank + Save to remove password protection."
+            ),
+            style="Help.TLabel",
+        ).pack(anchor="w", pady=(2, 8))
+
+        pw_var = tk.StringVar(value=settings.get("password", ""))
+        show_var = tk.BooleanVar(value=False)
+
+        entry = ttk.Entry(body, textvariable=pw_var, show="\u2022", width=32)
+        entry.pack(anchor="w", fill="x")
+        entry.focus_set()
+
+        def _toggle_show():
+            entry.configure(show="" if show_var.get() else "\u2022")
+
+        ttk.Checkbutton(
+            body, text="Show password", variable=show_var, command=_toggle_show
+        ).pack(anchor="w", pady=(6, 10))
+
+        err_var = tk.StringVar(value="")
+        ttk.Label(body, textvariable=err_var, foreground="#a11", background=BG).pack(
+            anchor="w"
+        )
+
+        def _save_and_close():
+            new_pw = pw_var.get()
+            settings["password"] = new_pw
+            _save_settings(settings)
+            if new_pw == effective_password:
+                pw_restart_note_var.set("Password unchanged.")
+            else:
+                pw_restart_note_var.set(
+                    "Saved. Close and reopen rtplot-server.exe to apply."
+                )
+            _refresh_pw_state()
+            dlg.destroy()
+
+        def _cancel():
+            dlg.destroy()
+
+        btn_row = ttk.Frame(body)
+        btn_row.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_row, text="Save", command=_save_and_close).pack(side="right")
+        ttk.Button(btn_row, text="Cancel", command=_cancel).pack(
+            side="right", padx=(0, 6)
+        )
+        # Enter saves, Escape cancels — matches typical form UX.
+        dlg.bind("<Return>", lambda _e: _save_and_close())
+        dlg.bind("<Escape>", lambda _e: _cancel())
+        # Center over the main window.
+        dlg.update_idletasks()
+        rx, ry = root.winfo_rootx(), root.winfo_rooty()
+        rw, rh = root.winfo_width(), root.winfo_height()
+        dw, dh = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+        dlg.geometry(f"+{rx + (rw - dw) // 2}+{ry + (rh - dh) // 2}")
+
+    pw_btn_row = ttk.Frame(advanced_frame)
+    pw_btn_row.pack(anchor="w", pady=(6, 0))
+    ttk.Button(
+        pw_btn_row,
+        text=("Change password" if effective_password else "Set password"),
+        command=_open_password_dialog,
+    ).pack(side="left")
+    ttk.Label(
+        pw_btn_row, textvariable=pw_restart_note_var, style="Muted.TLabel"
+    ).pack(side="left", padx=(8, 0))
 
     # --- Log sub-section (further collapsable inside advanced) ---
     ttk.Separator(advanced_frame, orient="horizontal").pack(fill="x", pady=(14, 10))

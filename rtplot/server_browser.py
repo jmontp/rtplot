@@ -160,12 +160,26 @@ parser.add_argument(
     default=1000,
 )
 
+parser.add_argument(
+    "--password",
+    help=(
+        "Gate the whole UI behind a shared password (HTTP Basic). Any"
+        " username is accepted. Can also be set via RTPLOT_PASSWORD env"
+        " var; the flag wins if both are given. Leave unset to serve"
+        " without auth."
+    ),
+    action="store",
+    type=str,
+    default=None,
+)
+
 args = parser.parse_args()
 
 NEW_SUBPLOT_IN_ROW = args.column
 DEBUG_TEXT_ENABLED = args.debug
 SKIP_PLOT_DATAPOINTS = args.skip
 ADAPT_SKIP_PLOT_DATAPOINTS = args.adaptable
+AUTH_PASSWORD = args.password if args.password is not None else os.environ.get("RTPLOT_PASSWORD")
 
 
 ###############################
@@ -1310,9 +1324,140 @@ async def on_cleanup(app):
     zmq_ctx.term()
 
 
+###############################
+# Cookie-based password auth #
+###############################
+
+# A single shared password unlocks the UI for every browser. We deliberately
+# don't model users: the browser's native Basic-Auth popup forces a username
+# field, which was confusing — one password is enough for LAN deployments.
+# On successful POST /login, the server mints a random session token, stashes
+# it in an in-memory set, and drops it as an HttpOnly cookie. All other
+# routes (including the WebSocket upgrade) require that cookie.
+import hmac as _hmac
+import secrets as _secrets
+
+SESSION_COOKIE = "rtplot_session"
+_AUTH_REQUIRED = AUTH_PASSWORD is not None
+_AUTH_EXPECTED = AUTH_PASSWORD.encode("utf-8") if AUTH_PASSWORD else None
+_valid_tokens: set = set()
+
+
+_LOGIN_HTML = """<!doctype html>
+<html lang=\"en\">
+<head>
+<meta charset=\"utf-8\" />
+<title>rtplot \u2014 sign in</title>
+<style>
+  html, body { margin: 0; padding: 0; min-height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #eef1f5; color: #222; }
+  body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  form { background: #fff; border: 1px solid #d2d8e0; border-radius: 8px; padding: 28px 32px; box-shadow: 0 6px 24px rgba(30,40,60,0.08); width: 320px; }
+  h1 { margin: 0 0 6px 0; font-size: 20px; color: #1d3566; }
+  p { margin: 0 0 18px 0; color: #666; font-size: 13px; }
+  label { display: block; font-size: 12px; color: #555; margin-bottom: 6px; }
+  input[type=password] { width: 100%; box-sizing: border-box; padding: 9px 10px; font-size: 14px; border: 1px solid #bfc7d2; border-radius: 4px; font-family: inherit; }
+  input[type=password]:focus { outline: none; border-color: #2a5db0; box-shadow: 0 0 0 2px rgba(42,93,176,0.15); }
+  button { margin-top: 14px; width: 100%; padding: 10px; font-size: 14px; border: none; border-radius: 4px; background: #2a5db0; color: #fff; cursor: pointer; font-weight: 600; }
+  button:hover { background: #244f95; }
+  .err { background: #fce8e8; color: #a11; border: 1px solid #f0c2c2; padding: 8px 10px; border-radius: 4px; font-size: 13px; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+<form method=\"post\" action=\"/login\" autocomplete=\"on\">
+  <h1>rtplot</h1>
+  <p>Enter the shared password to continue.</p>
+  __ERROR_BLOCK__
+  <label for=\"pw\">Password</label>
+  <input id=\"pw\" type=\"password\" name=\"password\" autofocus required />
+  <button type=\"submit\">Sign in</button>
+</form>
+</body>
+</html>
+"""
+
+
+def _render_login_page(error: bool = False) -> str:
+    err = '<div class="err">Wrong password. Try again.</div>' if error else ""
+    return _LOGIN_HTML.replace("__ERROR_BLOCK__", err)
+
+
+def _has_valid_session(request) -> bool:
+    tok = request.cookies.get(SESSION_COOKIE)
+    return bool(tok) and tok in _valid_tokens
+
+
+async def handle_login(request):
+    # GET  /login  -> render form
+    # POST /login  -> check password, set cookie on success
+    if request.method == "GET":
+        if _has_valid_session(request):
+            raise web.HTTPFound("/")
+        return web.Response(
+            text=_render_login_page(),
+            content_type="text/html",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    if not _AUTH_REQUIRED:
+        raise web.HTTPFound("/")
+    data = await request.post()
+    supplied = (data.get("password") or "").encode("utf-8")
+    if _hmac.compare_digest(supplied, _AUTH_EXPECTED or b""):
+        token = _secrets.token_urlsafe(32)
+        _valid_tokens.add(token)
+        resp = web.HTTPFound("/")
+        resp.set_cookie(
+            SESSION_COOKIE,
+            token,
+            httponly=True,
+            samesite="Lax",
+            max_age=30 * 24 * 3600,  # 30 days
+            path="/",
+        )
+        raise resp
+    return web.Response(
+        text=_render_login_page(error=True),
+        content_type="text/html",
+        status=401,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def handle_logout(request):
+    tok = request.cookies.get(SESSION_COOKIE)
+    if tok:
+        _valid_tokens.discard(tok)
+    resp = web.HTTPFound("/login")
+    resp.del_cookie(SESSION_COOKIE, path="/")
+    raise resp
+
+
+@web.middleware
+async def session_auth_middleware(request, handler):
+    if not _AUTH_REQUIRED:
+        return await handler(request)
+    path = request.path
+    # Login page and its form post must stay open; the uPlot assets that
+    # the main page pulls in are gated too, which is consistent with the
+    # rest of the UI.
+    if path == "/login" or path == "/logout":
+        return await handler(request)
+    if _has_valid_session(request):
+        return await handler(request)
+    # WebSocket upgrade can't follow a redirect — respond with 401 so the
+    # browser-side reconnect loop surfaces a clear error.
+    if path == "/ws":
+        return web.Response(status=401, text="Not signed in.\n")
+    raise web.HTTPFound("/login")
+
+
 def build_app():
-    app = web.Application()
+    middlewares = [session_auth_middleware] if _AUTH_REQUIRED else []
+    app = web.Application(middlewares=middlewares)
     app.router.add_get("/", handle_index)
+    app.router.add_get("/login", handle_login)
+    app.router.add_post("/login", handle_login)
+    app.router.add_get("/logout", handle_logout)
     app.router.add_get("/ws", handle_ws)
     app.router.add_get("/snapshot.html", handle_snapshot)
     static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -1341,6 +1486,10 @@ def _detect_lan_ips():
 def main():
     app = build_app()
     print(f"rtplot browser server listening on http://localhost:{args.port}")
+    if _AUTH_REQUIRED:
+        print("  auth: shared password required (browsers see a login page)")
+    else:
+        print("  auth: none (set --password or RTPLOT_PASSWORD to gate the UI)")
     for ip in _detect_lan_ips():
         print(f"  also reachable at  http://{ip}:{args.port}")
     is_wsl = "WSL_DISTRO_NAME" in os.environ or "WSL_INTEROP" in os.environ
