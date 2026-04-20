@@ -956,6 +956,29 @@ async def rename_tab(tab_id: str, new_name: str):
     await broadcast_tab(tab_id)
 
 
+async def reconnect_tab(tab_id: str):
+    """Close and reopen ``tab_id``'s sockets, restart its receiver task.
+
+    The tab's buffer and plot config are preserved — if the sender on
+    the other side is still running the same stream we avoid a visible
+    flash to empty. A new config from the sender will replace the state
+    via the normal RECEIVED_PLOT_UPDATE path.
+    """
+    t = tabs.get(tab_id)
+    if t is None:
+        return
+    await _cancel_task(t.receiver_task)
+    # _open_tab_sockets closes first, then reopens. Status gets set to
+    # "idle" on success or "error" + a message on bind/connect failure.
+    _open_tab_sockets(t)
+    # Reset the data-rate estimate so a stale Hz doesn't mislead the
+    # resources panel until new samples arrive.
+    t.data_rate_hz = 0.0
+    t._last_rx_ts = 0.0
+    t.receiver_task = asyncio.create_task(zmq_receiver(t))
+    await broadcast_tab(tab_id)
+
+
 ###############################
 # HTTP / WebSocket handlers #
 ###############################
@@ -1048,6 +1071,11 @@ async def handle_ws(request):
                     tid = payload.get("id")
                     if tid and tid != BIND_ME_ID:
                         await delete_tab(tid)
+
+                elif ptype == "tab_reconnect":
+                    tid = payload.get("id")
+                    if tid:
+                        await reconnect_tab(tid)
 
                 elif ptype == "control_button":
                     btn_id = payload.get("id")
