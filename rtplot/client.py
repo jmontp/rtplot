@@ -538,6 +538,12 @@ def poll_controls():
             if plot_desc_dict is not None:
                 socket.send_string(SENDING_PLOT_UPDATE)
                 socket.send_json(plot_desc_dict)
+                # Surface a one-line confirmation so the user can see in
+                # their script log that the recovery handshake worked.
+                # If they never see this after clicking Reconnect, the
+                # PUSH/PULL channel back from the server isn't wired —
+                # check that poll_controls() is actually being called.
+                print("rtplot.client: resent cached initialize_plots() config")
 
     buttons = _control_button_events
     _control_button_events = []

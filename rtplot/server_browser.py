@@ -215,7 +215,13 @@ RECEIVED_DISPLAY = 4
 BIND_ME_ID = "bind_me"
 BIND_ME_NAME = "Shared - Bind to me"
 
-TABS_FILE = os.path.join(os.path.expanduser("~"), ".rtplot", "tabs.json")
+# Path to the persisted tabs JSON. Honors RTPLOT_TABS_FILE so tests
+# (and operators with multi-user setups) can override without symlinking
+# their HOME directory or losing access to ~/.local site-packages.
+TABS_FILE = os.environ.get(
+    "RTPLOT_TABS_FILE",
+    os.path.join(os.path.expanduser("~"), ".rtplot", "tabs.json"),
+)
 
 zmq_ctx = zmq.asyncio.Context()
 
@@ -602,43 +608,67 @@ def _remove_ws(ws):
 def _open_tab_sockets(tab: Tab):
     """Open ``tab``'s data + control sockets according to its mode.
 
-    On failure, sets tab.status="error" and tab.error=<reason>; the tab
-    stays in the list but won't stream until re-opened.
+    For bind tabs, the just-closed sockets may leave the OS-level port
+    in a transient state for a few hundred ms (especially on Windows /
+    WSL). We retry the bind with a small backoff so the user-visible
+    Reconnect button doesn't fail spuriously the very first time. On
+    sustained failure we set tab.status="error" + tab.error=<reason>;
+    the tab stays in the list but won't stream until re-opened.
     """
     # Close any prior sockets first (e.g. on retry).
     _close_tab_sockets(tab)
 
-    try:
-        data = zmq_ctx.socket(zmq.SUB)
-        data.setsockopt_string(zmq.SUBSCRIBE, "")
-        ctrl = zmq_ctx.socket(zmq.PUSH)
-        ctrl.setsockopt(zmq.SNDHWM, 1000)
-        ctrl.setsockopt(zmq.LINGER, 0)
+    last_exc: Exception | None = None
+    attempts = 4 if tab.mode == "bind" else 1
+    for attempt in range(attempts):
+        try:
+            data = zmq_ctx.socket(zmq.SUB)
+            data.setsockopt_string(zmq.SUBSCRIBE, "")
+            data.setsockopt(zmq.LINGER, 0)
+            ctrl = zmq_ctx.socket(zmq.PUSH)
+            ctrl.setsockopt(zmq.SNDHWM, 1000)
+            ctrl.setsockopt(zmq.LINGER, 0)
 
-        if tab.mode == "bind":
-            data.bind(f"tcp://*:{ZMQ_DEFAULT_PORT}")
-            ctrl.bind(f"tcp://*:{ZMQ_CONTROL_PORT}")
-            tab.endpoint = f"*:{ZMQ_DEFAULT_PORT}"
-            print(f"[{tab.id}] ZMQ: bound on tcp://*:{ZMQ_DEFAULT_PORT}")
-        else:
-            data_ep, label = _normalize_connect_target(tab.endpoint)
-            data.connect(data_ep)
-            ctrl_ep, _ = _normalize_connect_target(
-                _control_target_from_data(tab.endpoint), port=ZMQ_CONTROL_PORT
-            )
-            ctrl.connect(ctrl_ep)
-            tab.endpoint = label
-            print(f"[{tab.id}] ZMQ: connected to {data_ep} (ctrl {ctrl_ep})")
+            if tab.mode == "bind":
+                data.bind(f"tcp://*:{ZMQ_DEFAULT_PORT}")
+                ctrl.bind(f"tcp://*:{ZMQ_CONTROL_PORT}")
+                tab.endpoint = f"*:{ZMQ_DEFAULT_PORT}"
+                print(f"[{tab.id}] ZMQ: bound on tcp://*:{ZMQ_DEFAULT_PORT}")
+            else:
+                data_ep, label = _normalize_connect_target(tab.endpoint)
+                data.connect(data_ep)
+                ctrl_ep, _ = _normalize_connect_target(
+                    _control_target_from_data(tab.endpoint), port=ZMQ_CONTROL_PORT
+                )
+                ctrl.connect(ctrl_ep)
+                tab.endpoint = label
+                print(f"[{tab.id}] ZMQ: connected to {data_ep} (ctrl {ctrl_ep})")
 
-        tab.data_sock = data
-        tab.ctrl_sock = ctrl
-        tab.status = "idle"
-        tab.error = None
-    except Exception as exc:  # noqa: BLE001
-        tab.status = "error"
-        tab.error = str(exc)
-        print(f"[{tab.id}] ZMQ open failed: {exc}")
-        _close_tab_sockets(tab)
+            tab.data_sock = data
+            tab.ctrl_sock = ctrl
+            tab.status = "idle"
+            tab.error = None
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            # Drop the half-built sockets before retrying so we don't
+            # leak descriptors and so the next attempt re-takes the port.
+            try: data.close(0)
+            except Exception: pass
+            try: ctrl.close(0)
+            except Exception: pass
+            if attempt < attempts - 1:
+                wait = 0.15 * (attempt + 1)
+                print(
+                    f"[{tab.id}] ZMQ open attempt {attempt + 1}/{attempts}"
+                    f" failed ({exc}); retrying in {wait:.2f}s"
+                )
+                time.sleep(wait)
+
+    tab.status = "error"
+    tab.error = str(last_exc) if last_exc is not None else "unknown error"
+    print(f"[{tab.id}] ZMQ open failed after {attempts} attempts: {last_exc}")
+    _close_tab_sockets(tab)
 
 
 def _close_tab_sockets(tab: Tab):
@@ -1001,24 +1031,44 @@ async def _request_config_resend(tab: "Tab"):
     the cached config so the plot picks back up without the user having
     to restart their script.
 
-    Retries on a brief schedule because the client's PULL socket may need
-    a moment to auto-reconnect to the freshly bound PUSH socket — a
-    one-shot DONTWAIT send to a peer-less PUSH gets silently dropped.
-    Stops early once we see ``tab.initialized`` flip to True (the client
-    has answered) so we don't spam.
+    Retries over a ~10 s window because:
+      * the client's PULL socket may need a moment to auto-reconnect to
+        the freshly bound PUSH socket — especially over a WAN/SSH link;
+      * a slow user loop may only call poll_controls() once per second,
+        so the message can sit unread in the PULL queue for a while;
+      * the client may not be running at all (no peer), in which case
+        the queued message is just dropped when the next reconnect happens.
+    Stops early once tab.initialized flips True (the client answered).
     """
-    for i, delay in enumerate((0.4, 1.0, 2.0)):
+    schedule = (0.3, 0.7, 1.5, 2.5, 5.0)  # cumulative ~10 s
+    started_initialized = tab.initialized
+    for i, delay in enumerate(schedule):
         await asyncio.sleep(delay)
         if tab.ctrl_sock is None:
             return
-        if i > 0 and tab.initialized:
+        if i > 0 and tab.initialized and not started_initialized:
             return
         try:
             await tab.ctrl_sock.send_json(
                 {"type": "resend_config"}, flags=zmq.DONTWAIT
             )
-        except (zmq.Again, zmq.ZMQError):
-            pass
+            if DEBUG_TEXT_ENABLED:
+                print(f"[{tab.id}] resend_config sent (attempt {i + 1}/{len(schedule)})")
+        except (zmq.Again, zmq.ZMQError) as exc:
+            if DEBUG_TEXT_ENABLED:
+                print(
+                    f"[{tab.id}] resend_config attempt {i + 1}/{len(schedule)}"
+                    f" failed: {exc} (likely no peer connected yet)"
+                )
+    # If we asked the client to re-init but nothing came back, surface
+    # a hint so the user knows where to look. Common causes: the client
+    # is on rtplot < 0.4.6 (no resend_config handler), or its loop never
+    # calls poll_controls(), or there's no client running at all.
+    if not started_initialized and not tab.initialized:
+        print(
+            f"[{tab.id}] no config received after resend_config nudges."
+            " Is the client running rtplot >= 0.4.6 and calling poll_controls()?"
+        )
 
 
 async def reconnect_tab(tab_id: str):
