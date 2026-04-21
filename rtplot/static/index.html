@@ -67,6 +67,13 @@
   .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; flex: 1 1 auto; min-width: 320px; }
   .plot-title { font-size: 13px; font-weight: 600; margin: 0 0 4px 4px; color: #333; }
   #empty-state { padding: 28px 32px; color: #888; font-size: calc(14px * var(--ui-scale)); font-style: italic; }
+  /* Persistent banner the server raises when a client-supplied plot
+     config fails to parse — the user used to be left guessing why
+     nothing rendered; now they get the reason + a local timestamp. */
+  .config-error-banner { margin: 12px 12px 0 12px; padding: 10px 14px; background: #fce8e8; color: #8a1a1a; border: 1px solid #f0c2c2; border-left: 4px solid #d24a4a; border-radius: 4px; font-size: calc(13px * var(--ui-scale)); }
+  .config-error-banner .ce-title { font-weight: 600; margin-right: 8px; }
+  .config-error-banner .ce-when { color: #6b1818; opacity: 0.8; font-family: monospace; font-size: calc(12px * var(--ui-scale)); }
+  .config-error-banner .ce-msg { display: block; margin-top: 4px; font-family: monospace; font-size: calc(12px * var(--ui-scale)); white-space: pre-wrap; word-break: break-word; }
   :root { --ctrl-unit-h: 38px; --ui-scale: 1; }
   .ctrl-row { display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: #fff; border: 1px solid #ddd; border-radius: 4px; flex-wrap: wrap; }
   .ctrl-item { display: flex; align-items: center; gap: 6px; }
@@ -187,6 +194,7 @@
       <div id="res-unavail" class="res-unavail" style="display:none;">psutil not installed &mdash; pip install psutil for live stats</div>
     </div>
   </div>
+  <div id="config-error-banner" class="config-error-banner" style="display:none"></div>
   <div id="plots" class="row"></div>
   <script src="/static/uPlot.iife.min.js"></script>
   <script src="/static/katex/katex.min.js"></script>
@@ -208,6 +216,43 @@
           return c;
         }
         return 'rgb(0,0,0)';
+      }
+
+      const configErrorBanner = document.getElementById('config-error-banner');
+
+      function fmtLocalTimestamp(unixSeconds) {
+        const d = new Date(unixSeconds * 1000);
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+               `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      }
+
+      function applyConfigErrorBanner() {
+        const t = activeTab && knownTabs[activeTab];
+        const err = t && t.last_config_error;
+        if (!err) {
+          configErrorBanner.style.display = 'none';
+          configErrorBanner.innerHTML = '';
+          return;
+        }
+        // Build with textContent on the leaf nodes so user-controlled
+        // strings (the error message) can't inject HTML.
+        configErrorBanner.innerHTML = '';
+        const head = document.createElement('div');
+        const title = document.createElement('span');
+        title.className = 'ce-title';
+        title.textContent = 'Last configuration was rejected';
+        head.appendChild(title);
+        const when = document.createElement('span');
+        when.className = 'ce-when';
+        when.textContent = `at ${fmtLocalTimestamp(err.timestamp)}`;
+        head.appendChild(when);
+        configErrorBanner.appendChild(head);
+        const body = document.createElement('span');
+        body.className = 'ce-msg';
+        body.textContent = err.message || '';
+        configErrorBanner.appendChild(body);
+        configErrorBanner.style.display = '';
       }
 
       // ---- LaTeX rendering ($...$ inline, $$...$$ display) ----
@@ -1111,6 +1156,7 @@
         showEmptyState('Loading tab \u2026');
         const t = knownTabs[id];
         setZmqMode(t.mode, t.endpoint);
+        applyConfigErrorBanner();
         sendCtrl({ type: 'tab_subscribe', id: id });
       }
 
@@ -1183,6 +1229,7 @@
               if (activeTab) {
                 const t = knownTabs[activeTab];
                 setZmqMode(t.mode, t.endpoint);
+                applyConfigErrorBanner();
                 sendCtrl({ type: 'tab_subscribe', id: activeTab });
                 showEmptyState('Loading tab \u2026');
               }
@@ -1193,6 +1240,7 @@
                 renderTabs();
                 if (msg.tab.id === activeTab) {
                   setZmqMode(msg.tab.mode, msg.tab.endpoint);
+                  applyConfigErrorBanner();
                 }
               }
             } else if (msg.type === 'tab_removed') {

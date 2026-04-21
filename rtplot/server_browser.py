@@ -306,6 +306,12 @@ class Tab:
     data_rate_hz: float = 0.0
     _last_rx_ts: float = 0.0
 
+    # When the most recent client-supplied config failed to parse we
+    # stash the reason + a unix timestamp so the browser can surface
+    # "your last config was rejected at HH:MM:SS" instead of just
+    # silently rendering nothing. Cleared on the next successful parse.
+    last_config_error: Optional[dict] = None
+
     def ensure_buffer(self):
         if self.buffer is None:
             self.buffer = np.zeros((INITIAL_NUM_TRACES, MAX_LOCAL_STORAGE))
@@ -344,6 +350,7 @@ def tab_public(t: Tab) -> dict:
         "endpoint": t.endpoint,
         "status": t.status,
         "error": t.error,
+        "last_config_error": t.last_config_error,
     }
 
 
@@ -711,8 +718,30 @@ async def zmq_receiver(tab: Tab):
         tab._last_rx_ts = now
 
         if category == RECEIVED_PLOT_UPDATE:
-            cfg = await sock.recv_json(object_pairs_hook=OrderedDict)
-            parse_config(tab, cfg)
+            # Decode + parse are wrapped so a malformed config doesn't kill
+            # the receiver task. We stash the failure on the tab so the
+            # browser can show "your last config was rejected at HH:MM:SS"
+            # instead of looking like nothing happened. Existing valid
+            # state (if any) is preserved on parse failure.
+            try:
+                cfg = await sock.recv_json(object_pairs_hook=OrderedDict)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"Could not decode config JSON: {type(exc).__name__}: {exc}"
+                print(f"[{tab.id}] {msg}")
+                tab.last_config_error = {"message": msg, "timestamp": time.time()}
+                await broadcast_tab(tab.id)
+                continue
+
+            try:
+                parse_config(tab, cfg)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"Configuration rejected: {type(exc).__name__}: {exc}"
+                print(f"[{tab.id}] {msg}")
+                tab.last_config_error = {"message": msg, "timestamp": time.time()}
+                await broadcast_tab(tab.id)
+                continue
+
+            tab.last_config_error = None  # clear: this one was good
             tab.config_dict = cfg
             tab.config_message = build_config_message(tab, cfg)
             tab.initialized = True
