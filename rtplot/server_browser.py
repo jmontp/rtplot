@@ -921,6 +921,10 @@ async def create_connect_tab(
     tabs[t.id] = t
     _open_tab_sockets(t)
     t.receiver_task = asyncio.create_task(zmq_receiver(t))
+    # If the client at the other end is already running and only called
+    # initialize_plots() once at its startup, this nudges it to resend
+    # the cached config so the new tab populates without a script restart.
+    asyncio.create_task(_request_config_resend(t))
     if persist:
         save_persisted_tabs()
     await broadcast_tab_list()
@@ -956,13 +960,47 @@ async def rename_tab(tab_id: str, new_name: str):
     await broadcast_tab(tab_id)
 
 
+async def _request_config_resend(tab: "Tab"):
+    """Nudge a still-running client to re-send its initialize_plots() payload.
+
+    The common scenario: the server crashed (or was restarted) mid-session
+    and lost the plot config it received the first time the client called
+    ``initialize_plots()``. The client is still happily streaming data,
+    but the new server has nothing to plot it on. This sends a
+    ``{"type": "resend_config"}`` control event over the tab's PUSH
+    socket; the client's poll_controls() loop intercepts it and re-sends
+    the cached config so the plot picks back up without the user having
+    to restart their script.
+
+    Retries on a brief schedule because the client's PULL socket may need
+    a moment to auto-reconnect to the freshly bound PUSH socket — a
+    one-shot DONTWAIT send to a peer-less PUSH gets silently dropped.
+    Stops early once we see ``tab.initialized`` flip to True (the client
+    has answered) so we don't spam.
+    """
+    for i, delay in enumerate((0.4, 1.0, 2.0)):
+        await asyncio.sleep(delay)
+        if tab.ctrl_sock is None:
+            return
+        if i > 0 and tab.initialized:
+            return
+        try:
+            await tab.ctrl_sock.send_json(
+                {"type": "resend_config"}, flags=zmq.DONTWAIT
+            )
+        except (zmq.Again, zmq.ZMQError):
+            pass
+
+
 async def reconnect_tab(tab_id: str):
     """Close and reopen ``tab_id``'s sockets, restart its receiver task.
 
     The tab's buffer and plot config are preserved — if the sender on
     the other side is still running the same stream we avoid a visible
-    flash to empty. A new config from the sender will replace the state
-    via the normal RECEIVED_PLOT_UPDATE path.
+    flash to empty. After the sockets come back up we ask the (likely
+    still-running) client to re-send its plot config so the connection
+    recovers cleanly even if the server itself restarted in the
+    meantime.
     """
     t = tabs.get(tab_id)
     if t is None:
@@ -976,6 +1014,7 @@ async def reconnect_tab(tab_id: str):
     t.data_rate_hz = 0.0
     t._last_rx_ts = 0.0
     t.receiver_task = asyncio.create_task(zmq_receiver(t))
+    asyncio.create_task(_request_config_resend(t))
     await broadcast_tab(tab_id)
 
 

@@ -25,6 +25,13 @@ control_socket.setsockopt(zmq.RCVHWM, 1000)
 _control_slider_values = {}
 _control_button_events = []
 
+# Cached payload of the most recent initialize_plots() call. The server
+# uses this to recover from its own crashes: when its tab loses the
+# config, it pushes a "resend_config" control event over the return
+# channel, and poll_controls() re-PUBs this dict so the plot reattaches
+# without the user restarting their script. None until first call.
+plot_desc_dict = None
+
 #Global variable to keep track of last connected address
 # default is fixed publisher mode, therefore you don't connect
 # to an address
@@ -506,6 +513,13 @@ def poll_controls():
         (cleared after this call).
 
     Call this from your tight loop before computing the next sample.
+
+    Also transparently handles ``resend_config`` requests from the server:
+    if the server crashed and reconnected (or the user clicked the
+    Reconnect button on a tab), it asks us to re-publish the cached
+    initialize_plots() payload so the plot rewires without the user
+    restarting their script. The request is consumed silently — the
+    returned ControlState only ever contains slider/button events.
     """
     global _control_button_events
     while True:
@@ -520,6 +534,10 @@ def poll_controls():
             _control_button_events.append(event.get("id"))
         elif evtype == "slider":
             _control_slider_values[event.get("id")] = float(event.get("value", 0.0))
+        elif evtype == "resend_config":
+            if plot_desc_dict is not None:
+                socket.send_string(SENDING_PLOT_UPDATE)
+                socket.send_json(plot_desc_dict)
 
     buttons = _control_button_events
     _control_button_events = []
