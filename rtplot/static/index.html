@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <title>rtplot</title>
 <link rel="stylesheet" href="/static/uPlot.min.css" />
+<link rel="stylesheet" href="/static/katex/katex.min.css" />
 <style>
   html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fafafa; color: #222; }
 
@@ -188,6 +189,8 @@
   </div>
   <div id="plots" class="row"></div>
   <script src="/static/uPlot.iife.min.js"></script>
+  <script src="/static/katex/katex.min.js"></script>
+  <script src="/static/katex/auto-render.min.js"></script>
   <script>
     (function () {
       const COLOR_MAP = {
@@ -205,6 +208,22 @@
           return c;
         }
         return 'rgb(0,0,0)';
+      }
+
+      // ---- LaTeX rendering ($...$ inline, $$...$$ display) ----
+      // KaTeX's auto-render walks an element's text nodes looking for the
+      // configured delimiters, so plain labels without `$` are completely
+      // unaffected. Errors don't throw — they render as the raw source so
+      // a typo in someone's label can't blow up the whole page.
+      const _latexDelims = [
+        { left: '$$', right: '$$', display: true },
+        { left: '$', right: '$', display: false },
+      ];
+      function renderLatexIn(el) {
+        if (!el || typeof renderMathInElement !== 'function') return;
+        try {
+          renderMathInElement(el, { delimiters: _latexDelims, throwOnError: false });
+        } catch (e) { /* swallow — keep the page alive */ }
       }
 
       const plotsDiv = document.getElementById('plots');
@@ -661,7 +680,20 @@
         if (!values) return;
         for (const [id, val] of Object.entries(values)) {
           const node = controlElements.displays[id];
-          if (node) node.textContent = formatDisplay(id, val);
+          if (!node) continue;
+          const text = formatDisplay(id, val);
+          // Re-render the value as LaTeX whenever it contains a delimiter
+          // so streamed text fields can show live equations. Plain numeric
+          // displays stay on the cheap textContent path.
+          if (typeof text === 'string' && text.indexOf('$') !== -1) {
+            node.textContent = '';
+            const span = document.createElement('span');
+            span.textContent = text;
+            node.appendChild(span);
+            renderLatexIn(node);
+          } else {
+            node.textContent = text;
+          }
         }
       }
 
@@ -782,6 +814,10 @@
         totalTraces = traceOffset;
         applySliderValues(cfg.slider_values);
         applyDisplayValues(cfg.display_values);
+        // Render LaTeX in everything we just built: uPlot's title,
+        // x/y axis labels, and legend (all rendered as HTML), plus the
+        // control rows that were appended above.
+        renderLatexIn(plotsDiv);
         applyVisibleSamples();
         scheduleRender();
       }
@@ -1004,6 +1040,10 @@
         add.title = 'Add a tab that connects to a remote device';
         add.addEventListener('click', openCreateForm);
         tabbar.appendChild(add);
+
+        // Render LaTeX inside tab names (endpoints stay literal — they're
+        // network addresses, not math).
+        tabbar.querySelectorAll('.tab-name').forEach(renderLatexIn);
       }
 
       function beginRename(tabEl, id, currentName) {

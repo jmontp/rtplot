@@ -1,12 +1,12 @@
 [tool.poetry]
 name = "better-rtplot"
-version = "0.4.4"
+version = "0.4.5"
 description = ""
 authors = ["jmontp <jmontp@umich.edu>"]
 license = "GPL V3.0"
 readme = "README.md"
 packages = [{include = "rtplot"}]
-include = ["rtplot/static/*"]
+include = ["rtplot/static/*", "rtplot/static/katex/*", "rtplot/static/katex/fonts/*"]
 
 [tool.poetry.dependencies]
 python = ">= 3.9, < 3.13"
