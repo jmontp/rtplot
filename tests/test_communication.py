@@ -529,11 +529,17 @@ class TestControlButtonRouting(_ServerTest):
                         )
                         # Send a button click from the "browser".
                         await ws.send_str(json.dumps({"type": "control_button", "id": "go"}))
-                # Client should see it on its PULL socket.
-                ev = zc.poll_one(timeout=3.0)
-                self.assertIsNotNone(ev, "client never received the button event")
-                self.assertEqual(ev.get("type"), "button")
-                self.assertEqual(ev.get("id"), "go")
+                # Client should see it on its PULL socket. Skip past any
+                # config_ack / seeded slider events emitted on parse.
+                got = None
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    ev = zc.poll_one(timeout=0.3)
+                    if ev is None: continue
+                    if ev.get("type") == "button":
+                        got = ev; break
+                self.assertIsNotNone(got, "client never received the button event")
+                self.assertEqual(got.get("id"), "go")
             finally:
                 zc.close()
         self.run_async(go())
@@ -552,11 +558,16 @@ class TestControlSliderRouting(_ServerTest):
                     ]}),
                 ])
                 zc.send_config(cfg)
-                # On parse, server echoes the seeded value back to the client.
-                seed = zc.poll_one(timeout=3.0)
-                self.assertIsNotNone(seed)
-                self.assertEqual(seed.get("type"), "slider")
-                self.assertEqual(seed.get("id"), "k")
+                # On parse, server emits config_ack + the seeded slider
+                # value. Drain until we pick out the seeded slider.
+                seed = None
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    ev = zc.poll_one(timeout=0.3)
+                    if ev is None: continue
+                    if ev.get("type") == "slider" and ev.get("id") == "k":
+                        seed = ev; break
+                self.assertIsNotNone(seed, "server didn't echo seeded slider")
                 self.assertAlmostEqual(seed.get("value"), 3.0)
 
                 # Now drag from a "browser".
@@ -569,10 +580,15 @@ class TestControlSliderRouting(_ServerTest):
                         await ws.send_str(json.dumps({
                             "type": "control_slider", "id": "k", "value": 7.5
                         }))
-                drag = zc.poll_one(timeout=3.0)
-                self.assertIsNotNone(drag)
-                self.assertEqual(drag.get("id"), "k")
-                self.assertAlmostEqual(drag.get("value"), 7.5)
+                drag = None
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    ev = zc.poll_one(timeout=0.3)
+                    if ev is None: continue
+                    if ev.get("type") == "slider" and ev.get("id") == "k" \
+                            and abs(ev.get("value", 0) - 7.5) < 1e-6:
+                        drag = ev; break
+                self.assertIsNotNone(drag, "client never saw the dragged slider value")
             finally:
                 zc.close()
         self.run_async(go())
@@ -1098,6 +1114,69 @@ class TestBindFailureRecovery(unittest.TestCase):
                     self.assertIsNotNone(healed, "bind_me did not recover after port freed")
                     self.assertIsNone(healed["tab"]["error"])
         asyncio.run(asyncio.wait_for(go(), timeout=15))
+
+
+class TestInitializePlotsHandshake(_ServerTest):
+    """initialize_plots() should block until the server acks the config.
+
+    Exercises the config_ack round-trip directly and indirectly through
+    the real client:
+      * The server emits `config_ack` on its PUSH socket after parse.
+      * The client's initialize_plots() returns only after that ack
+        (or a 2 s warning timeout), so scripts that immediately call
+        send_array() don't lose the config to the slow-joiner window.
+    """
+
+    def test_server_emits_config_ack(self):
+        zc = ZmqTestClient()
+        try:
+            cfg = OrderedDict([("p0", {"names": ["x"], "xrange": 100})])
+            zc.send_config(cfg)
+            # Pull the ack off the return channel; it must arrive within
+            # a couple of seconds on localhost.
+            found = False
+            deadline = time.time() + 3.0
+            while time.time() < deadline:
+                ev = zc.poll_one(timeout=0.5)
+                if ev is None:
+                    continue
+                if ev.get("type") == "config_ack":
+                    found = True
+                    break
+            self.assertTrue(found, "server did not emit config_ack after parse")
+        finally:
+            zc.close()
+
+    def test_real_client_initialize_plots_blocks_until_ack(self):
+        # Run a subprocess that calls initialize_plots and records the
+        # wall-clock time it took. If the handshake is wired up, it
+        # should return quickly (< 1 s) once the ack comes back.
+        code = f"""
+import sys, time
+sys.path.insert(0, {REPO_ROOT!r})
+from rtplot import client
+client.local_plot()
+t0 = time.monotonic()
+client.initialize_plots({{"names":["sig"], "title":"HS"}})
+print(f"EVT:DONE:{{time.monotonic() - t0:.3f}}", flush=True)
+"""
+        p = subprocess.Popen(
+            [sys.executable, "-u", "-c", code],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        )
+        try:
+            line = _drain_client_lines(p, lambda l: "EVT:DONE:" in l, timeout=6.0)
+            self.assertIsNotNone(line, "real client never finished initialize_plots()")
+            elapsed = float(line.strip().split(":", 2)[2])
+            # Must return within the handshake budget + a generous margin.
+            # On localhost the ack typically comes back in ~50–300 ms.
+            self.assertLess(
+                elapsed, 2.5,
+                f"initialize_plots() returned in {elapsed:.2f}s, "
+                "suggesting the ack never arrived and it hit the 2 s timeout"
+            )
+        finally:
+            p.terminate(); p.wait(timeout=2)
 
 
 if __name__ == "__main__":

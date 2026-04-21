@@ -780,6 +780,12 @@ async def zmq_receiver(tab: Tab):
             last_time = now
             tab.status = "streaming"
             tab.error = None
+            # Blocking-handshake ack: tells initialize_plots() on the
+            # client side that the config made it past PUB/SUB's
+            # slow-joiner window so it can stop resending and return.
+            # Old clients ignore unknown event types, so this is safe
+            # to emit unconditionally.
+            await send_control_event(tab, {"type": "config_ack"})
             await broadcast_text_tab(tab.id, tab.config_message)
             await broadcast_tab(tab.id)
             snap = make_snapshot_message(tab)

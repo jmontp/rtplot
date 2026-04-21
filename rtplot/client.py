@@ -414,8 +414,17 @@ def send_array(A, flags=0, copy=True, track=False):
     socket.send(A, flags, copy=copy, track=track)
 
 
-def initialize_plots(plot_descriptions=1):
-    """Send a json description of desired plot.
+def initialize_plots(plot_descriptions=1, handshake_timeout=2.0):
+    """Send a json description of desired plot and block until the
+    server acknowledges it.
+
+    Without the handshake, a fast script that calls ``initialize_plots()``
+    and immediately starts firing ``send_array()`` can lose the config
+    frame to ZMQ's PUB/SUB slow-joiner window — the server then drops
+    every subsequent data frame because no plot is declared yet and the
+    browser just stays blank. We resend the config on a short schedule
+    until the server PUSHes back a ``config_ack``, guaranteeing the
+    plot is live by the time this call returns.
 
     Inputs
     ------
@@ -426,6 +435,11 @@ def initialize_plots(plot_descriptions=1):
         - list of str: one plot, one trace per name
         - list of list of str: one plot per sublist
         - list of dict: multiple plots, each with full styling
+    handshake_timeout:
+        Max seconds to wait for the config_ack. On timeout we print a
+        warning and return (so an old server without the handshake
+        feature, or a server on a flaky network, doesn't block the
+        caller forever). Set to 0 to skip the handshake entirely.
     """
     global plot_desc_dict
 
@@ -477,11 +491,65 @@ def initialize_plots(plot_descriptions=1):
     else:
         raise TypeError("Incorrect usage of initialize_plots, verify github for usage")
 
-    #Send the category
-    socket.send_string(SENDING_PLOT_UPDATE)
+    _send_initialize_with_handshake(plot_desc_dict, handshake_timeout)
 
-    #Send the description
-    socket.send_json(plot_desc_dict)
+
+def _send_initialize_with_handshake(cfg, timeout):
+    """Publish ``cfg`` and block until the server acks it.
+
+    Any control events (button presses, slider updates) that happen to
+    arrive during the handshake are stashed in the module-level caches
+    so the next ``poll_controls()`` call still sees them — we don't
+    want the handshake to swallow real user interaction.
+    """
+    global _control_button_events
+
+    def _send_once():
+        socket.send_string(SENDING_PLOT_UPDATE)
+        socket.send_json(cfg)
+
+    _send_once()
+
+    if timeout is None or timeout <= 0:
+        return  # opt-out: fire-and-forget like the pre-handshake behavior
+
+    deadline = time.time() + timeout
+    resend_interval = 0.2
+    last_send = time.time()
+
+    poller = zmq.Poller()
+    poller.register(control_socket, zmq.POLLIN)
+
+    while time.time() < deadline:
+        remaining_ms = max(10, int((deadline - time.time()) * 1000))
+        next_resend_ms = max(1, int((last_send + resend_interval - time.time()) * 1000))
+        wait_ms = min(remaining_ms, next_resend_ms)
+        events = dict(poller.poll(wait_ms))
+        if control_socket in events:
+            try:
+                event = control_socket.recv_json(flags=zmq.NOBLOCK)
+            except (zmq.Again, zmq.ZMQError):
+                continue
+            evtype = event.get("type")
+            if evtype == "config_ack":
+                return
+            elif evtype == "button":
+                _control_button_events.append(event.get("id"))
+            elif evtype == "slider":
+                _control_slider_values[event.get("id")] = float(event.get("value", 0.0))
+            # Unknown / resend_config: ignore during handshake.
+        # Resend if the window elapsed without an ack; PUB/SUB will
+        # drop the first send during slow-join but retries land.
+        if time.time() - last_send >= resend_interval:
+            _send_once()
+            last_send = time.time()
+
+    print(
+        "rtplot.client: initialize_plots() timed out waiting for server ack"
+        f" after {timeout:.1f}s — the plot config may have been dropped."
+        " If you're on an older server (rtplot < 0.4.9) this warning is"
+        " expected and harmless."
+    )
 
 
 def set_display(display_id: str, value):
