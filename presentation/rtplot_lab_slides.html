@@ -6,19 +6,19 @@
 <title>rtplot Lab Presentation</title>
 <style>
   :root {
-    --bg: #101216;
-    --panel: #181c22;
-    --panel-2: #202733;
-    --text: #eef2f7;
-    --muted: #9ea9b8;
-    --line: #394353;
-    --accent: #42c7b7;
-    --accent-2: #f2b84b;
-    --accent-3: #ee6f73;
-    --blue: #6aa5ff;
-    --green: #82cf73;
-    --code: #0b0e13;
-    --shadow: rgba(0, 0, 0, 0.35);
+    --bg: #f3f6fb;
+    --panel: #ffffff;
+    --panel-2: #eef3f8;
+    --text: #17202f;
+    --muted: #5f6d80;
+    --line: #c8d2df;
+    --accent: #0f8f83;
+    --accent-2: #b87406;
+    --accent-3: #cf4c55;
+    --blue: #2d73d5;
+    --green: #438b38;
+    --code: #f7f9fc;
+    --shadow: rgba(38, 57, 77, 0.14);
   }
 
   * { box-sizing: border-box; }
@@ -50,8 +50,8 @@
     display: none;
     padding: 5.5vh 6.2vw 8vh;
     background:
-      linear-gradient(90deg, rgba(66, 199, 183, 0.06), transparent 34%),
-      linear-gradient(180deg, #12151a 0%, #0d0f13 100%);
+      linear-gradient(90deg, rgba(15, 143, 131, 0.08), transparent 38%),
+      linear-gradient(180deg, #f9fbfe 0%, #eef3f8 100%);
   }
 
   .slide.active {
@@ -102,6 +102,12 @@
     font-size: clamp(24px, 2.3vw, 34px);
   }
 
+  .byline {
+    color: var(--muted);
+    font-size: clamp(20px, 1.7vw, 26px);
+    font-weight: 620;
+  }
+
   .two-col {
     display: grid;
     grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
@@ -117,6 +123,120 @@
 
   .stack { display: grid; gap: 18px; }
 
+  .hook-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+    gap: 28px;
+    align-items: stretch;
+  }
+
+  .hook-demo {
+    display: grid;
+    gap: 18px;
+    align-content: stretch;
+    background: #f6f8fb;
+    color: #111827;
+    border: 1px solid #8591a3;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 14px 36px var(--shadow);
+  }
+
+  .hook-demo h3 {
+    color: #111827;
+    margin-bottom: 0;
+  }
+
+  .hook-plot {
+    min-height: 190px;
+    border: 1px solid #c6ceda;
+    border-radius: 8px;
+    background:
+      linear-gradient(#e2e8f0 1px, transparent 1px),
+      linear-gradient(90deg, #e2e8f0 1px, transparent 1px),
+      #ffffff;
+    background-size: 38px 38px;
+    padding: 18px;
+  }
+
+  .hook-plot svg {
+    width: 100%;
+    height: 100%;
+    min-height: 150px;
+    display: block;
+  }
+
+  .hook-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+
+  .widget {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid #c6ceda;
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  .widget strong {
+    font-size: clamp(17px, 1.35vw, 22px);
+  }
+
+  .note-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .note {
+    display: inline-flex;
+    width: fit-content;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: #eef3f8;
+    border: 1px solid #c8d2df;
+    color: #2d3848;
+    font-size: clamp(15px, 1vw, 18px);
+    font-weight: 650;
+  }
+
+  .slider-track {
+    height: 10px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent) 0 68%, #d7dee9 68% 100%);
+  }
+
+  .dial {
+    width: 64px;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    justify-self: start;
+    background:
+      radial-gradient(circle at center, #ffffff 0 40%, transparent 41%),
+      conic-gradient(var(--accent-2) 0 235deg, #d7dee9 235deg 360deg);
+    border: 1px solid #b8c2d0;
+    position: relative;
+  }
+
+  .dial::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 11px;
+    width: 3px;
+    height: 23px;
+    border-radius: 999px;
+    background: #111827;
+    transform: translateX(-50%) rotate(38deg);
+    transform-origin: 50% 21px;
+  }
+
   .card {
     background: var(--panel);
     border: 1px solid var(--line);
@@ -129,7 +249,7 @@
 
   .card p, .card li {
     font-size: clamp(19px, 1.6vw, 25px);
-    color: #d8dee7;
+    color: #2d3848;
   }
 
   ul {
@@ -144,16 +264,16 @@
   code {
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     font-size: 0.86em;
-    color: #d7fff6;
+    color: #09665e;
   }
 
   pre {
     margin: 0;
     padding: 22px 24px;
     background: var(--code);
-    border: 1px solid #2e3847;
+    border: 1px solid #c6d0de;
     border-radius: 8px;
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 16px 34px var(--shadow);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 16px 34px var(--shadow);
     overflow: hidden;
   }
 
@@ -162,7 +282,7 @@
     white-space: pre-wrap;
     font-size: clamp(15px, 1.18vw, 21px);
     line-height: 1.38;
-    color: #e9edf3;
+    color: #17202f;
   }
 
   .code-sample pre {
@@ -180,13 +300,13 @@
     line-height: 1.32;
   }
 
-  .py-comment { color: #8b96a7; }
-  .py-doc { color: #82cf73; }
-  .py-key { color: #f2b84b; font-weight: 700; }
-  .py-str { color: #8fd7ff; }
-  .py-num { color: #ee9a6a; }
-  .py-call { color: #42c7b7; }
-  .py-name { color: #dce7f5; }
+  .py-comment { color: #6b788a; }
+  .py-doc { color: #237a34; }
+  .py-key { color: #995f00; font-weight: 700; }
+  .py-str { color: #0b6f9e; }
+  .py-num { color: #b25018; }
+  .py-call { color: #087d72; }
+  .py-name { color: #17202f; }
 
   .diagram {
     display: grid;
@@ -219,9 +339,9 @@
     gap: 3px;
     padding: 12px 14px;
     border-radius: 8px;
-    background: rgba(32, 39, 51, 0.72);
-    border: 1px solid #394353;
-    opacity: 0.58;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid #c8d2df;
+    opacity: 0.68;
   }
 
   .context-node strong {
@@ -235,21 +355,21 @@
 
   .context-node.active {
     opacity: 1;
-    background: rgba(66, 199, 183, 0.16);
+    background: rgba(15, 143, 131, 0.12);
     border-color: var(--accent);
-    box-shadow: 0 0 0 1px rgba(66, 199, 183, 0.35), 0 12px 26px rgba(0, 0, 0, 0.24);
+    box-shadow: 0 0 0 1px rgba(15, 143, 131, 0.28), 0 12px 26px var(--shadow);
   }
 
   .context-node.active.server {
-    background: rgba(242, 184, 75, 0.15);
+    background: rgba(184, 116, 6, 0.12);
     border-color: var(--accent-2);
-    box-shadow: 0 0 0 1px rgba(242, 184, 75, 0.32), 0 12px 26px rgba(0, 0, 0, 0.24);
+    box-shadow: 0 0 0 1px rgba(184, 116, 6, 0.26), 0 12px 26px var(--shadow);
   }
 
   .context-node.active.viewer {
-    background: rgba(106, 165, 255, 0.15);
+    background: rgba(45, 115, 213, 0.11);
     border-color: var(--blue);
-    box-shadow: 0 0 0 1px rgba(106, 165, 255, 0.32), 0 12px 26px rgba(0, 0, 0, 0.24);
+    box-shadow: 0 0 0 1px rgba(45, 115, 213, 0.24), 0 12px 26px var(--shadow);
   }
 
   .context-arrow {
@@ -270,25 +390,25 @@
     padding: 20px;
     border-radius: 8px;
     background: var(--panel-2);
-    border: 1px solid #465164;
+    border: 1px solid #c8d2df;
   }
 
   .node.client {
-    background: rgba(66, 199, 183, 0.16);
+    background: rgba(15, 143, 131, 0.12);
     border-color: var(--accent);
-    box-shadow: 0 0 0 1px rgba(66, 199, 183, 0.35), 0 12px 26px rgba(0, 0, 0, 0.24);
+    box-shadow: 0 0 0 1px rgba(15, 143, 131, 0.28), 0 12px 26px var(--shadow);
   }
 
   .node.server {
-    background: rgba(242, 184, 75, 0.15);
+    background: rgba(184, 116, 6, 0.12);
     border-color: var(--accent-2);
-    box-shadow: 0 0 0 1px rgba(242, 184, 75, 0.32), 0 12px 26px rgba(0, 0, 0, 0.24);
+    box-shadow: 0 0 0 1px rgba(184, 116, 6, 0.26), 0 12px 26px var(--shadow);
   }
 
   .node.viewer {
-    background: rgba(106, 165, 255, 0.15);
+    background: rgba(45, 115, 213, 0.11);
     border-color: var(--blue);
-    box-shadow: 0 0 0 1px rgba(106, 165, 255, 0.32), 0 12px 26px rgba(0, 0, 0, 0.24);
+    box-shadow: 0 0 0 1px rgba(45, 115, 213, 0.24), 0 12px 26px var(--shadow);
   }
 
   .node strong {
@@ -325,9 +445,9 @@
     gap: 8px;
     padding: 6px 12px;
     border-radius: 999px;
-    background: rgba(66, 199, 183, 0.14);
-    border: 1px solid rgba(66, 199, 183, 0.5);
-    color: #dffffb;
+    background: rgba(15, 143, 131, 0.1);
+    border: 1px solid rgba(15, 143, 131, 0.38);
+    color: #075f57;
     font-size: clamp(16px, 1.2vw, 20px);
     font-weight: 650;
   }
@@ -414,7 +534,7 @@
     bottom: 0;
     height: 5px;
     width: 100%;
-    background: #232936;
+    background: #d7e0ec;
     z-index: 10;
   }
 
@@ -437,18 +557,18 @@
   button {
     width: 38px;
     height: 34px;
-    border: 1px solid #556174;
+    border: 1px solid #aab6c6;
     border-radius: 6px;
     color: var(--text);
-    background: #1a202b;
+    background: #ffffff;
     cursor: pointer;
     font-size: 20px;
   }
 
-  button:hover { background: #263143; }
+  button:hover { background: #e9eff7; }
 
   a {
-    color: #8fd7ff;
+    color: var(--blue);
     text-decoration: none;
   }
 
@@ -463,7 +583,8 @@
   @media (max-width: 900px) {
     .slide { padding: 4vh 5vw 7vh; overflow-y: auto; }
     .slide.active { align-content: start; }
-    .two-col, .three-col, .recipe { grid-template-columns: 1fr; }
+    .two-col, .three-col, .recipe, .hook-layout { grid-template-columns: 1fr; }
+    .hook-controls { grid-template-columns: 1fr; }
     .flow, .flow.two, .context-flow { grid-template-columns: 1fr; }
     .arrow { transform: rotate(90deg); justify-self: center; }
     .context-arrow { transform: rotate(90deg); justify-self: center; }
@@ -477,7 +598,8 @@
   <section class="slide active">
     <div class="kicker">Lab Project Overview</div>
     <h1>rtplot</h1>
-    <p class="subhead">Real-time plotting and browser-based controls for Python scripts running locally or across the lab network.</p>
+    <p class="subhead">Live plots and browser controls for Python experiments, whether the script is on your laptop, a robot, or another lab machine.</p>
+    <p class="byline">José A. Montes Pérez</p>
     <div class="badge-row">
       <span class="pill">Python client</span>
       <span class="pill">ZMQ transport</span>
@@ -487,146 +609,143 @@
   </section>
 
   <section class="slide">
-    <div class="kicker">Problem</div>
-    <h2>Experiments need live visibility without dragging a full GUI stack into every script.</h2>
-    <div class="three-col">
-      <div class="card">
-        <h3>Fast iteration</h3>
-        <p>Plot state, commands, errors, torques, sensor values, and debug signals while the script is running.</p>
+    <div class="kicker">Why It Exists</div>
+    <h2>Most experiment scripts need visibility, but not a custom GUI.</h2>
+    <div class="hook-layout">
+      <div class="stack">
+        <div class="card">
+          <h3>See the run</h3>
+          <p>Plot commands, torques, sensor values, and debug signals while the script is still running.</p>
+        </div>
+        <div class="card">
+          <h3>Tune live</h3>
+          <p>Use browser controls for values you would otherwise hard-code, restart, and try again.</p>
+        </div>
+        <div class="card">
+          <h3>Keep code simple</h3>
+          <p>Add a few client calls to the script instead of building a separate plotting app.</p>
+        </div>
       </div>
-      <div class="card">
-        <h3>Remote machines</h3>
-        <p>The data source might be a robot, Raspberry Pi, DAQ box, WSL instance, or laptop on Wi-Fi.</p>
-      </div>
-      <div class="card">
-        <h3>Low ceremony</h3>
-        <p>The plotting setup should be a few client calls, not a new app framework.</p>
+      <div class="hook-demo" aria-label="Example sine wave plot with controls">
+        <h3>Sine generator hook</h3>
+        <div class="hook-plot">
+          <svg viewBox="0 0 720 210" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M0,106 C38,22 76,22 114,106 C152,190 190,190 228,106 C266,22 304,22 342,106 C380,190 418,190 456,106 C494,22 532,22 570,106 C608,190 646,190 684,106 C696,76 708,58 720,50" fill="none" stroke="#0e7cc9" stroke-width="5" />
+            <line x1="0" y1="106" x2="720" y2="106" stroke="#9ca7b8" stroke-width="2" stroke-dasharray="8 9" />
+          </svg>
+        </div>
+        <div class="hook-controls">
+          <div class="widget">
+            <strong>Magnitude</strong>
+            <div class="slider-track" aria-hidden="true"></div>
+            <code>gain = 3.4</code>
+          </div>
+          <div class="widget">
+            <strong>Frequency</strong>
+            <div class="dial" aria-hidden="true"></div>
+            <code>freq = 1.7 Hz</code>
+          </div>
+        </div>
       </div>
     </div>
   </section>
 
   <section class="slide">
-    <div class="kicker">Architecture</div>
-    <h2>Three parts: client, server, viewers.</h2>
+    <div class="kicker">Mental Model</div>
+    <h2>Pick one plot host. Open the viewer. Send data from Python.</h2>
     <div class="diagram">
       <div class="flow">
         <div class="node client">
-          <strong>Client</strong>
+          <strong>🤖 Sender</strong>
           <span>Your Python script</span>
-          <span><code>send_array()</code> and <code>poll_controls()</code></span>
+          <span>🤖 robot · 🍓 Pi · 💻 laptop</span>
         </div>
         <div class="arrow">→</div>
         <div class="node server">
-          <strong>Server</strong>
-          <span>rtplot plot host</span>
-          <span>ZMQ in, WebSocket out</span>
+          <strong>💻 Plot host</strong>
+          <span>rtplot server</span>
+          <span>💻 laptop · 🖥️ workstation</span>
         </div>
         <div class="arrow">→</div>
         <div class="node viewer">
-          <strong>Viewers</strong>
+          <strong>👀 Viewers</strong>
           <span>Browser tabs</span>
-          <span>Local, laptop, phone, live demos</span>
+          <span>💻 laptop · 📱 phone · 🖥️ monitor</span>
         </div>
-      </div>
-      <div class="card">
-        <p>Data flows client to server on <code>5555</code>. Controls flow server to client on <code>5556</code>. The browser UI is served from <code>8050</code>.</p>
       </div>
     </div>
   </section>
 
   <section class="slide">
     <div class="kicker">Part 1</div>
-    <h2>The client lives inside the experiment script.</h2>
+    <h2>Start the plot host first.</h2>
     <div class="context-flow">
-      <div class="context-node active">
-        <strong>Client</strong>
+      <div class="context-node">
+        <strong>🤖 Sender</strong>
         <span>Python script</span>
       </div>
       <div class="context-arrow active">→</div>
-      <div class="context-node server">
-        <strong>Server</strong>
-        <span>Plot host</span>
+      <div class="context-node active server">
+        <strong>💻 Plot host</strong>
+        <span>running first</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node viewer">
-        <strong>Viewers</strong>
+        <strong>👀 Viewers</strong>
         <span>Browser tabs</span>
       </div>
     </div>
     <div class="two-col">
       <div class="card">
-        <h3>What it owns</h3>
+        <h3>Good host choices</h3>
         <ul>
-          <li>Server endpoint selection</li>
-          <li>Plot layout declaration</li>
-          <li>Data publishing</li>
-          <li>Control polling</li>
-          <li>Browser control polling</li>
+          <li>Your laptop during development.</li>
+          <li>A lab workstation for shared demos.</li>
+          <li>Windows, Linux, macOS, or WSL2.</li>
+          <li>The robot/Pi/DAQ if that is the reachable machine.</li>
         </ul>
       </div>
-      <pre><code>from rtplot import client
-
-client.local_plot()
-client.initialize_plots(["signal"])
-
-while running:
-    y = get_next_sample()
-    client.send_array(y)</code></pre>
+      <div class="stack">
+        <div class="card">
+          <h3>Executable</h3>
+          <ul class="tight-list">
+            <li>Download <code>rtplot-server-&lt;version&gt;</code> from <a href="https://github.com/jmontp/rtplot/releases">GitHub Releases</a>.</li>
+            <li>Pick the Windows, Linux, or macOS asset for the host machine.</li>
+            <li>No Python install is needed.</li>
+            <li>Double-click the executable to open it.</li>
+          </ul>
+          <div class="note-row">
+            <span class="note">🚫🐍 no Python</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Direct Python Invocation</h3>
+          <pre><code>pip install "better-rtplot[browser]"
+python -m rtplot.server_browser</code></pre>
+          <div class="note-row">
+            <span class="note">🐍 Python required</span>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
   <section class="slide">
     <div class="kicker">Part 2</div>
-    <h2>The server is the plot host.</h2>
+    <h2>Viewers only need the host URL.</h2>
     <div class="context-flow">
       <div class="context-node">
-        <strong>Client</strong>
-        <span>Python script</span>
-      </div>
-      <div class="context-arrow active">→</div>
-      <div class="context-node active server">
-        <strong>Server</strong>
-        <span>Plot host</span>
-      </div>
-      <div class="context-arrow active">→</div>
-      <div class="context-node viewer">
-        <strong>Viewers</strong>
-        <span>Browser tabs</span>
-      </div>
-    </div>
-    <div class="two-col">
-      <div class="card">
-        <h3>Responsibilities</h3>
-        <ul>
-          <li>Receives data/config from one or more clients.</li>
-          <li>Hosts the browser UI.</li>
-          <li>Streams binary deltas to viewers.</li>
-          <li>Sends widget events back to the script.</li>
-        </ul>
-      </div>
-      <div class="card">
-        <h3>Presentation assumption</h3>
-        <p>The server is already running before the client examples are launched. The deck focuses on the client script that publishes data and polls controls.</p>
-      </div>
-    </div>
-  </section>
-
-  <section class="slide">
-    <div class="kicker">Part 3</div>
-    <h2>Viewers are just browser tabs.</h2>
-    <div class="context-flow">
-      <div class="context-node">
-        <strong>Client</strong>
+        <strong>🤖 Sender</strong>
         <span>Python script</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node server">
-        <strong>Server</strong>
-        <span>Plot host</span>
+        <strong>💻 Plot host</strong>
+        <span>serves UI</span>
       </div>
       <div class="context-arrow active">→</div>
       <div class="context-node active viewer">
-        <strong>Viewers</strong>
+        <strong>👀 Viewers</strong>
         <span>Browser tabs</span>
       </div>
     </div>
@@ -645,26 +764,72 @@ while running:
       <div class="card">
         <h3>Viewer modes</h3>
         <ul>
-          <li>Open <code>localhost:8050</code> on the plot host.</li>
-          <li>Open <code>http://&lt;plot-host-ip&gt;:8050</code> from another device.</li>
-          <li>Open the same live plot from multiple browser tabs.</li>
-          <li>No Python required for viewers.</li>
+          <li>💻 Open <code>localhost:8050</code> on the plot host.</li>
+          <li>📱 Open <code>http://&lt;plot-host-ip&gt;:8050</code> from a phone or tablet.</li>
+          <li>🖥️ Use another laptop or display for demos and monitoring.</li>
+          <li>🚫🐍 No Python required for viewers.</li>
         </ul>
       </div>
     </div>
   </section>
 
   <section class="slide">
-    <div class="kicker">Data Flow</div>
-    <h2>A single loop can plot data and consume browser controls.</h2>
+    <div class="kicker">Part 3</div>
+    <h2>Add the rtplot client to the experiment script.</h2>
     <div class="context-flow">
       <div class="context-node active">
-        <strong>Client</strong>
+        <strong>🤖 Sender</strong>
+        <span>Python script</span>
+      </div>
+      <div class="context-arrow active">→</div>
+      <div class="context-node server">
+        <strong>💻 Plot host</strong>
+        <span>running first</span>
+      </div>
+      <div class="context-arrow">→</div>
+      <div class="context-node viewer">
+        <strong>👀 Viewers</strong>
+        <span>Browser tabs</span>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <h3>What the script owns</h3>
+        <ul>
+          <li>Choose the plot host.</li>
+          <li>Declare trace names, labels, ranges, and controls.</li>
+          <li>Publish samples from the loop.</li>
+          <li>Poll browser controls when needed.</li>
+        </ul>
+        <div class="note-row">
+          <span class="note">🐍 Python required</span>
+        </div>
+      </div>
+      <pre><code>from rtplot import client
+
+client.local_plot()  # host is this machine
+# or: client.configure_ip("192.168.1.42")
+
+client.initialize_plots(["signal"])
+
+while running:
+    ctrl = client.poll_controls()
+    y = get_next_sample(ctrl)
+    client.send_array(y)</code></pre>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Data Flow</div>
+    <h2>The same loop can publish data and read browser controls.</h2>
+    <div class="context-flow">
+      <div class="context-node active">
+        <strong>Sender</strong>
         <span>send + poll</span>
       </div>
       <div class="context-arrow active">↔</div>
       <div class="context-node active server">
-        <strong>Server</strong>
+        <strong>Plot host</strong>
         <span>bridge</span>
       </div>
       <div class="context-arrow active">↔</div>
@@ -675,13 +840,13 @@ while running:
     </div>
     <div class="flow">
       <div class="node">
-        <strong>Python loop</strong>
-        <span>Computes sample</span>
+        <strong>Python script</strong>
+        <span>Computes samples</span>
       </div>
       <div class="arrow">→</div>
       <div class="node">
-        <strong>rtplot server</strong>
-        <span>Receives array and control state</span>
+        <strong>Plot host</strong>
+        <span>Routes data and controls</span>
       </div>
       <div class="arrow">↔</div>
       <div class="node">
@@ -695,17 +860,17 @@ client.send_array(gain * signal)</code></pre>
   </section>
 
   <section class="slide compact code-sample">
-    <div class="kicker">Client Example 1</div>
+    <div class="kicker">Example 1</div>
     <h2><code>presentation/examples/01_sine_stream.py</code></h2>
     <div class="context-flow">
       <div class="context-node active">
-        <strong>Client</strong>
+        <strong>Sender</strong>
         <span>this script</span>
       </div>
       <div class="context-arrow active">→</div>
       <div class="context-node server">
-        <strong>Server</strong>
-        <span>already running</span>
+        <strong>Plot host</strong>
+        <span>running first</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node viewer">
@@ -717,15 +882,15 @@ client.send_array(gain * signal)</code></pre>
       <div class="card">
         <h3>What this file demonstrates</h3>
         <ul>
-          <li>The minimum end-to-end client flow.</li>
-          <li>Connect to the local plot host.</li>
+          <li>The minimum end-to-end sender flow.</li>
+          <li>Connect to a plot host on the same machine.</li>
           <li>Declare one named trace with fixed axes.</li>
           <li>Stream samples at roughly 100 Hz.</li>
         </ul>
       </div>
       <pre><code><span class="py-doc">"""End-to-end client example: stream a live sine wave.
 
-Start the rtplot server yourself first, then run:
+Start the plot host first, then run:
 
     python presentation/examples/01_sine_stream.py
 """</span>
@@ -760,17 +925,17 @@ client.<span class="py-call">initialize_plots</span>([
   </section>
 
   <section class="slide compact code-sample">
-    <div class="kicker">Client Example 2</div>
+    <div class="kicker">Example 2</div>
     <h2><code>presentation/examples/02_gait_subplots.py</code></h2>
     <div class="context-flow">
       <div class="context-node active">
-        <strong>Client</strong>
+        <strong>Sender</strong>
         <span>this script</span>
       </div>
       <div class="context-arrow active">→</div>
       <div class="context-node server">
-        <strong>Server</strong>
-        <span>already running</span>
+        <strong>Plot host</strong>
+        <span>running first</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node viewer">
@@ -782,7 +947,7 @@ client.<span class="py-call">initialize_plots</span>([
       <div class="card">
         <h3>What this file demonstrates</h3>
         <ul>
-          <li>Multiple plots declared from one client script.</li>
+          <li>Multiple plots declared from one sender script.</li>
           <li>Multiple named traces per plot.</li>
           <li>Domain-specific labels, colors, and y ranges.</li>
           <li>A flat <code>send_array</code> call carrying all traces.</li>
@@ -790,7 +955,7 @@ client.<span class="py-call">initialize_plots</span>([
       </div>
       <pre><code><span class="py-doc">"""End-to-end client example: stream a multi-subplot robot-style layout.
 
-Start the rtplot server yourself first, then run:
+Start the plot host first, then run:
 
     python presentation/examples/02_gait_subplots.py
 """</span>
@@ -839,42 +1004,19 @@ client.<span class="py-call">initialize_plots</span>([
   </section>
 
   <section class="slide compact code-sample">
-    <div class="kicker">Client Example 3</div>
+    <div class="kicker">Example 3</div>
     <h2><code>presentation/examples/03_interactive_controls.py</code></h2>
-    <div class="context-flow">
-      <div class="context-node active">
-        <strong>Client</strong>
-        <span>this script</span>
-      </div>
-      <div class="context-arrow active">↔</div>
-      <div class="context-node server">
-        <strong>Server</strong>
-        <span>already running</span>
-      </div>
-      <div class="context-arrow">↔</div>
-      <div class="context-node viewer">
-        <strong>Viewers</strong>
-        <span>controls</span>
-      </div>
-    </div>
     <div class="two-col">
       <div class="card">
         <h3>What this file demonstrates</h3>
         <ul>
           <li>Controls declared in the same plot layout as data traces.</li>
           <li>Button, slider, dial, numeric display, and text status widgets.</li>
-          <li><code>poll_controls()</code> as a nonblocking part of the loop.</li>
+          <li><code>poll_controls()</code> as a nonblocking loop call.</li>
           <li>Script-to-browser status updates with <code>set_display()</code>.</li>
         </ul>
       </div>
-      <pre><code><span class="py-doc">"""End-to-end client example: browser controls affect the Python loop.
-
-Start the rtplot server yourself first, then run:
-
-    python presentation/examples/03_interactive_controls.py
-
-Open http://127.0.0.1:8050, then drag Gain/Frequency or press Reset.
-"""</span>
+      <pre><code><span class="py-doc">"""Browser controls affect the Python loop."""</span>
 
 <span class="py-key">import</span> math
 <span class="py-key">import</span> time
@@ -934,17 +1076,17 @@ end = time.<span class="py-call">time</span>() + <span class="py-num">12</span>
   </section>
 
   <section class="slide compact code-sample">
-    <div class="kicker">Client Example 4</div>
+    <div class="kicker">Example 4</div>
     <h2><code>presentation/examples/04_batched_sender.py</code></h2>
     <div class="context-flow">
       <div class="context-node active">
-        <strong>Client</strong>
+        <strong>Sender</strong>
         <span>this script</span>
       </div>
       <div class="context-arrow active">→</div>
       <div class="context-node server">
-        <strong>Server</strong>
-        <span>already running</span>
+        <strong>Plot host</strong>
+        <span>running first</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node viewer">
@@ -964,7 +1106,7 @@ end = time.<span class="py-call">time</span>() + <span class="py-num">12</span>
       </div>
       <pre><code><span class="py-doc">"""End-to-end client example: send batched numpy arrays.
 
-Start the rtplot server yourself first, then run:
+Start the plot host first, then run:
 
     python presentation/examples/04_batched_sender.py
 """</span>
@@ -1007,15 +1149,15 @@ batch_size = <span class="py-num">50</span>
 
   <section class="slide">
     <div class="kicker">Networking 1</div>
-    <h2>Everything local</h2>
+    <h2>Local is the default development setup.</h2>
     <div class="flow">
       <div class="node">
-        <strong>Python client</strong>
+        <strong>Sender script</strong>
         <span><code>127.0.0.1:5555</code></span>
       </div>
       <div class="arrow">→</div>
       <div class="node">
-        <strong>Server</strong>
+        <strong>Plot host</strong>
         <span>same machine</span>
       </div>
       <div class="arrow">→</div>
@@ -1025,59 +1167,59 @@ batch_size = <span class="py-num">50</span>
       </div>
     </div>
     <div class="card">
-      <p>Best for development, debugging examples, and quick plots while writing code.</p>
+      <p>Use this for examples, quick debugging, and plots while you are writing code.</p>
     </div>
   </section>
 
   <section class="slide compact">
     <div class="kicker">Networking 2</div>
-    <h2>Mode A: laptop plot host binds</h2>
+    <h2>Mode A: the plot host waits for the sender.</h2>
     <div class="recipe">
       <div class="card role">
-        <h3>Laptop</h3>
+        <h3>Laptop / workstation</h3>
         <ul>
-          <li>Already running as the plot host.</li>
-          <li>Binds data/control sockets.</li>
-          <li>Hosts <code>localhost:8050</code>.</li>
+          <li>Runs <code>rtplot-server</code>.</li>
+          <li>Binds <code>:5555</code> and <code>:5556</code>.</li>
+          <li>Serves the browser on <code>:8050</code>.</li>
         </ul>
       </div>
       <div class="card role sender">
         <h3>Robot / Pi / DAQ</h3>
         <ul>
-          <li>Runs the Python client script.</li>
+          <li>Runs the Python sender script.</li>
           <li>Calls <code>configure_ip("&lt;laptop-ip&gt;")</code>.</li>
-          <li>Sends data to the laptop.</li>
+          <li>Sends data to the plot host.</li>
         </ul>
       </div>
     </div>
     <div class="card">
-      <p>Common lab setup when your laptop is the machine everyone can reach on Wi-Fi.</p>
+      <p>Use this when the host machine is easy for the sender and viewers to reach on the lab network.</p>
     </div>
   </section>
 
   <section class="slide compact">
     <div class="kicker">Networking 3</div>
-    <h2>Mode B: sender binds, laptop connects</h2>
+    <h2>Mode B: the sender waits, and the plot host connects.</h2>
     <div class="recipe">
       <div class="card role sender">
         <h3>Robot / Pi / DAQ</h3>
         <ul>
           <li>Has the stable IP address.</li>
-          <li>Client binds data/control sockets.</li>
+          <li>Sender binds data/control sockets.</li>
           <li>Publishes from the experiment loop.</li>
         </ul>
       </div>
       <div class="card role">
-        <h3>Laptop</h3>
+        <h3>Laptop / workstation</h3>
         <ul>
-          <li>Already running in connect mode.</li>
-          <li>Points at the sender endpoint.</li>
-          <li>Still serves browser UI on <code>8050</code>.</li>
+          <li>Runs <code>rtplot-server -p &lt;sender-ip&gt;</code>.</li>
+          <li>Connects out to the sender endpoint.</li>
+          <li>Still serves the browser on <code>:8050</code>.</li>
         </ul>
       </div>
     </div>
     <div class="card">
-      <p>The client-side piece is the sender loop publishing data from the machine with the stable address.</p>
+      <p>Use this when the robot/Pi has the stable address or firewall rules make outbound host connections easier.</p>
     </div>
   </section>
 
@@ -1099,7 +1241,7 @@ batch_size = <span class="py-num">50</span>
       <ul>
         <li>Open the plot host LAN IP from the viewer.</li>
         <li>Allow inbound TCP <code>8050</code> through the host firewall.</li>
-        <li>The viewer does not need the ZMQ ports.</li>
+        <li>Do not expose <code>5555</code> or <code>5556</code> to viewers.</li>
       </ul>
     </div>
   </section>
@@ -1126,7 +1268,7 @@ New-NetFirewallRule -DisplayName "rtplot wsl" `
 
   <section class="slide">
     <div class="kicker">LLM Workflow</div>
-    <h2>How to get LLM agents to make your plots</h2>
+    <h2>Ask an agent for sender code, not a new plotting system.</h2>
     <div class="two-col">
       <div class="card">
         <h3>Give the agent context</h3>
@@ -1134,7 +1276,7 @@ New-NetFirewallRule -DisplayName "rtplot wsl" `
           <li>If the agent has internet access, give it the rtplot GitHub link.</li>
           <li>Ask it to read the README, API reference, and examples.</li>
           <li>Tell it which signals, units, ranges, and controls you want.</li>
-          <li>Have it generate the client code inside your experiment script.</li>
+          <li>Have it add rtplot calls inside your experiment script.</li>
         </ul>
       </div>
       <pre><code>Use rtplot for this experiment.
@@ -1153,7 +1295,7 @@ Keep the plotting code in one helper function.</code></pre>
 
   <section class="slide">
     <div class="kicker">Ports</div>
-    <h2>Know which connections matter.</h2>
+    <h2>Only the browser port belongs to viewers.</h2>
     <div class="card">
       <div class="port-row">
         <strong><code>8050</code></strong>
@@ -1162,32 +1304,37 @@ Keep the plotting code in one helper function.</code></pre>
       </div>
       <div class="port-row">
         <strong><code>5555</code></strong>
-        <span>ZMQ data: sender to server</span>
-        <span class="pill">sender/server only</span>
+        <span>ZMQ data: sender to plot host</span>
+        <span class="pill">sender/host only</span>
       </div>
       <div class="port-row">
         <strong><code>5556</code></strong>
-        <span>ZMQ controls: server to sender</span>
-        <span class="pill">sender/server only</span>
+        <span>ZMQ controls: plot host to sender</span>
+        <span class="pill">sender/host only</span>
       </div>
     </div>
   </section>
 
   <section class="slide compact">
     <div class="kicker">Runnable Examples</div>
-    <h2>Keep the deck static; run client scripts from the terminal.</h2>
+    <h2>Run the host once, then run any example sender.</h2>
     <div class="two-col">
       <div class="card">
-        <h3>Client examples</h3>
+        <h3>Sender examples</h3>
         <ul>
+          <li><code>presentation/examples/00_sine_controls.py</code></li>
           <li><code>presentation/examples/01_sine_stream.py</code></li>
           <li><code>presentation/examples/02_gait_subplots.py</code></li>
           <li><code>presentation/examples/03_interactive_controls.py</code></li>
           <li><code>presentation/examples/04_batched_sender.py</code></li>
         </ul>
       </div>
-      <pre><code># Start the rtplot server yourself first.
+      <pre><code># Terminal 1: start the plot host.
+python -m rtplot.server_browser
 
+# Terminal 2: run one sender.
+
+python presentation/examples/00_sine_controls.py
 python presentation/examples/01_sine_stream.py
 python presentation/examples/02_gait_subplots.py
 python presentation/examples/03_interactive_controls.py
@@ -1197,15 +1344,15 @@ python presentation/examples/04_batched_sender.py</code></pre>
 
   <section class="slide">
     <div class="kicker">Close</div>
-    <h2>rtplot keeps plotting close to the script while making the viewer easy to share.</h2>
+    <h2>rtplot keeps plots close to the script and easy to share.</h2>
     <div class="three-col">
       <div class="card">
         <h3>Script-first</h3>
-        <p>Plot config and data stay with the experiment code.</p>
+        <p>Plot config, data, and controls stay with the experiment code.</p>
       </div>
       <div class="card">
         <h3>Network-aware</h3>
-        <p>Either side can bind, and viewers only need a browser.</p>
+        <p>Either side can bind, and viewers only need the host URL.</p>
       </div>
       <div class="card">
         <h3>Lab-friendly</h3>
