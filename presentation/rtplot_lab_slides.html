@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>rtplot Lab Presentation</title>
+<title>rtplot+ Lab Presentation</title>
 <style>
   :root {
     --bg: #f3f6fb;
@@ -345,12 +345,12 @@
   }
 
   .context-node strong {
-    font-size: clamp(18px, 1.5vw, 24px);
+    font-size: clamp(30px, 2.6vw, 42px);
   }
 
   .context-node span {
     color: var(--muted);
-    font-size: clamp(13px, 1vw, 17px);
+    font-size: clamp(22px, 1.8vw, 30px);
   }
 
   .context-node.active {
@@ -412,12 +412,12 @@
   }
 
   .node strong {
-    font-size: clamp(24px, 2.2vw, 34px);
+    font-size: clamp(30px, 2.8vw, 42px);
   }
 
   .node span {
     color: var(--muted);
-    font-size: clamp(17px, 1.4vw, 23px);
+    font-size: clamp(21px, 1.8vw, 29px);
   }
 
   .arrow {
@@ -456,6 +456,10 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 22px;
+  }
+
+  .recipe.three {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .role {
@@ -585,7 +589,7 @@
     .slide.active { align-content: start; }
     .two-col, .three-col, .recipe, .hook-layout { grid-template-columns: 1fr; }
     .hook-controls { grid-template-columns: 1fr; }
-    .flow, .flow.two, .context-flow { grid-template-columns: 1fr; }
+    .flow, .flow.two, .context-flow, .recipe.three { grid-template-columns: 1fr; }
     .arrow { transform: rotate(90deg); justify-self: center; }
     .context-arrow { transform: rotate(90deg); justify-self: center; }
     .port-row { grid-template-columns: 1fr; gap: 6px; }
@@ -597,7 +601,7 @@
 <main class="deck" aria-live="polite">
   <section class="slide active">
     <div class="kicker">Lab Project Overview</div>
-    <h1>rtplot</h1>
+    <h1>rtplot+</h1>
     <p class="subhead">Live plots and browser controls for Python experiments, whether the script is on your laptop, a robot, or another lab machine.</p>
     <p class="byline">José A. Montes Pérez</p>
     <div class="badge-row">
@@ -658,19 +662,19 @@
         <div class="node client">
           <strong>🤖 Sender</strong>
           <span>Your Python script</span>
-          <span>🤖 robot · 🍓 Pi · 💻 laptop</span>
+          <span>device: 🤖 robot · 🍓 Pi · 💻 laptop</span>
         </div>
         <div class="arrow">→</div>
         <div class="node server">
           <strong>💻 Plot host</strong>
           <span>rtplot server</span>
-          <span>💻 laptop · 🖥️ workstation</span>
+          <span>device: 💻 laptop · 🖥️ workstation</span>
         </div>
         <div class="arrow">→</div>
         <div class="node viewer">
           <strong>👀 Viewers</strong>
           <span>Browser tabs</span>
-          <span>💻 laptop · 📱 phone · 🖥️ monitor</span>
+          <span>device: 💻 laptop · 📱 phone · 🖥️ display</span>
         </div>
       </div>
     </div>
@@ -682,17 +686,17 @@
     <div class="context-flow">
       <div class="context-node">
         <strong>🤖 Sender</strong>
-        <span>Python script</span>
+        <span>device: 🤖 robot · 🍓 Pi · 💻 laptop</span>
       </div>
       <div class="context-arrow active">→</div>
       <div class="context-node active server">
         <strong>💻 Plot host</strong>
-        <span>running first</span>
+        <span>device: 💻 laptop · 🖥️ workstation</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node viewer">
         <strong>👀 Viewers</strong>
-        <span>Browser tabs</span>
+        <span>device: 💻 laptop · 📱 phone · 🖥️ display</span>
       </div>
     </div>
     <div class="two-col">
@@ -701,7 +705,6 @@
         <ul>
           <li>Your laptop during development.</li>
           <li>A lab workstation for shared demos.</li>
-          <li>Windows, Linux, macOS, or WSL2.</li>
           <li>The robot/Pi/DAQ if that is the reachable machine.</li>
         </ul>
       </div>
@@ -710,8 +713,6 @@
           <h3>Executable</h3>
           <ul class="tight-list">
             <li>Download <code>rtplot-server-&lt;version&gt;</code> from <a href="https://github.com/jmontp/rtplot/releases">GitHub Releases</a>.</li>
-            <li>Pick the Windows, Linux, or macOS asset for the host machine.</li>
-            <li>No Python install is needed.</li>
             <li>Double-click the executable to open it.</li>
           </ul>
           <div class="note-row">
@@ -736,17 +737,17 @@ python -m rtplot.server_browser</code></pre>
     <div class="context-flow">
       <div class="context-node">
         <strong>🤖 Sender</strong>
-        <span>Python script</span>
+        <span>device: 🤖 robot · 🍓 Pi · 💻 laptop</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node server">
         <strong>💻 Plot host</strong>
-        <span>serves UI</span>
+        <span>device: 💻 laptop · 🖥️ workstation</span>
       </div>
       <div class="context-arrow active">→</div>
       <div class="context-node active viewer">
         <strong>👀 Viewers</strong>
-        <span>Browser tabs</span>
+        <span>device: 💻 laptop · 📱 phone · 🖥️ display</span>
       </div>
     </div>
     <div class="two-col">
@@ -762,13 +763,15 @@ python -m rtplot.server_browser</code></pre>
         </div>
       </div>
       <div class="card">
-        <h3>Viewer modes</h3>
+        <h3>👀 Viewer devices</h3>
         <ul>
-          <li>💻 Open <code>localhost:8050</code> on the plot host.</li>
-          <li>📱 Open <code>http://&lt;plot-host-ip&gt;:8050</code> from a phone or tablet.</li>
-          <li>🖥️ Use another laptop or display for demos and monitoring.</li>
-          <li>🚫🐍 No Python required for viewers.</li>
+          <li>Open <code>http://&lt;plot-host-ip&gt;:8050</code> from viewer devices.</li>
+          <li>Open <code>localhost:8050</code> on the plot host.</li>
+          <li>Many viewers can connect to one plot host.</li>
         </ul>
+        <div class="note-row">
+          <span class="note">🐍 no Python</span>
+        </div>
       </div>
     </div>
   </section>
@@ -779,24 +782,24 @@ python -m rtplot.server_browser</code></pre>
     <div class="context-flow">
       <div class="context-node active">
         <strong>🤖 Sender</strong>
-        <span>Python script</span>
+        <span>device: 🤖 experiment machine</span>
       </div>
       <div class="context-arrow active">→</div>
       <div class="context-node server">
         <strong>💻 Plot host</strong>
-        <span>running first</span>
+        <span>device: 💻 laptop · 🖥️ workstation</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node viewer">
         <strong>👀 Viewers</strong>
-        <span>Browser tabs</span>
+        <span>device: 💻 laptop · 📱 phone · 🖥️ display</span>
       </div>
     </div>
     <div class="two-col">
       <div class="card">
         <h3>What the script owns</h3>
         <ul>
-          <li>Choose the plot host.</li>
+          <li>Choose the plot host device.</li>
           <li>Declare trace names, labels, ranges, and controls.</li>
           <li>Publish samples from the loop.</li>
           <li>Poll browser controls when needed.</li>
@@ -821,37 +824,21 @@ while running:
 
   <section class="slide">
     <div class="kicker">Data Flow</div>
-    <h2>The same loop can publish data and read browser controls.</h2>
+    <h2>Oh, and we can add buttons.</h2>
     <div class="context-flow">
       <div class="context-node active">
         <strong>Sender</strong>
-        <span>send + poll</span>
+        <span>device: 🤖 experiment machine</span>
       </div>
-      <div class="context-arrow active">↔</div>
+      <div class="context-arrow active">←</div>
       <div class="context-node active server">
         <strong>Plot host</strong>
-        <span>bridge</span>
+        <span>device: 💻 laptop · 🖥️ workstation</span>
       </div>
-      <div class="context-arrow active">↔</div>
+      <div class="context-arrow active">←</div>
       <div class="context-node active viewer">
         <strong>Viewers</strong>
-        <span>plot + controls</span>
-      </div>
-    </div>
-    <div class="flow">
-      <div class="node">
-        <strong>Python script</strong>
-        <span>Computes samples</span>
-      </div>
-      <div class="arrow">→</div>
-      <div class="node">
-        <strong>Plot host</strong>
-        <span>Routes data and controls</span>
-      </div>
-      <div class="arrow">↔</div>
-      <div class="node">
-        <strong>Browser</strong>
-        <span>Draws plot, emits widget events</span>
+        <span>device: 💻 laptop · 📱 phone · 🖥️ display</span>
       </div>
     </div>
     <pre><code>ctrl = client.poll_controls()
@@ -865,17 +852,17 @@ client.send_array(gain * signal)</code></pre>
     <div class="context-flow">
       <div class="context-node active">
         <strong>Sender</strong>
-        <span>this script</span>
+        <span>device: 🤖 experiment machine</span>
       </div>
       <div class="context-arrow active">→</div>
       <div class="context-node server">
         <strong>Plot host</strong>
-        <span>running first</span>
+        <span>device: 💻 laptop · 🖥️ workstation</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node viewer">
         <strong>Viewers</strong>
-        <span>browser</span>
+        <span>device: 💻 laptop · 📱 phone · 🖥️ display</span>
       </div>
     </div>
     <div class="two-col">
@@ -930,17 +917,17 @@ client.<span class="py-call">initialize_plots</span>([
     <div class="context-flow">
       <div class="context-node active">
         <strong>Sender</strong>
-        <span>this script</span>
+        <span>device: 🤖 experiment machine</span>
       </div>
       <div class="context-arrow active">→</div>
       <div class="context-node server">
         <strong>Plot host</strong>
-        <span>running first</span>
+        <span>device: 💻 laptop · 🖥️ workstation</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node viewer">
         <strong>Viewers</strong>
-        <span>browser</span>
+        <span>device: 💻 laptop · 📱 phone · 🖥️ display</span>
       </div>
     </div>
     <div class="two-col">
@@ -1081,17 +1068,17 @@ end = time.<span class="py-call">time</span>() + <span class="py-num">12</span>
     <div class="context-flow">
       <div class="context-node active">
         <strong>Sender</strong>
-        <span>this script</span>
+        <span>device: 🤖 experiment machine</span>
       </div>
       <div class="context-arrow active">→</div>
       <div class="context-node server">
         <strong>Plot host</strong>
-        <span>running first</span>
+        <span>device: 💻 laptop · 🖥️ workstation</span>
       </div>
       <div class="context-arrow">→</div>
       <div class="context-node viewer">
         <strong>Viewers</strong>
-        <span>browser</span>
+        <span>device: 💻 laptop · 📱 phone · 🖥️ display</span>
       </div>
     </div>
     <div class="two-col">
@@ -1153,16 +1140,19 @@ batch_size = <span class="py-num">50</span>
     <div class="flow">
       <div class="node">
         <strong>Sender script</strong>
+        <span>device: 💻 this machine</span>
         <span><code>127.0.0.1:5555</code></span>
       </div>
       <div class="arrow">→</div>
       <div class="node">
         <strong>Plot host</strong>
-        <span>same machine</span>
+        <span>device: 💻 this machine</span>
+        <span>rtplot server</span>
       </div>
       <div class="arrow">→</div>
       <div class="node">
         <strong>Browser</strong>
+        <span>viewer: 👀 this machine</span>
         <span><code>localhost:8050</code></span>
       </div>
     </div>
@@ -1174,21 +1164,29 @@ batch_size = <span class="py-num">50</span>
   <section class="slide compact">
     <div class="kicker">Networking 2</div>
     <h2>Mode A: the plot host waits for the sender.</h2>
-    <div class="recipe">
+    <div class="recipe three">
       <div class="card role">
-        <h3>Laptop / workstation</h3>
+        <h3>💻 Plot host device</h3>
         <ul>
+          <li>💻 Laptop or 🖥️ workstation.</li>
           <li>Runs <code>rtplot-server</code>.</li>
           <li>Binds <code>:5555</code> and <code>:5556</code>.</li>
           <li>Serves the browser on <code>:8050</code>.</li>
         </ul>
       </div>
       <div class="card role sender">
-        <h3>Robot / Pi / DAQ</h3>
+        <h3>🤖 Sender device</h3>
         <ul>
+          <li>🤖 Robot, 🍓 Pi, DAQ, or 💻 laptop.</li>
           <li>Runs the Python sender script.</li>
           <li>Calls <code>configure_ip("&lt;laptop-ip&gt;")</code>.</li>
-          <li>Sends data to the plot host.</li>
+        </ul>
+      </div>
+      <div class="card role viewer">
+        <h3>👀 Viewer device</h3>
+        <ul>
+          <li>💻 Laptop, 📱 phone, tablet, or 🖥️ display.</li>
+          <li>Opens <code>http://&lt;laptop-ip&gt;:8050</code>.</li>
         </ul>
       </div>
     </div>
@@ -1200,21 +1198,29 @@ batch_size = <span class="py-num">50</span>
   <section class="slide compact">
     <div class="kicker">Networking 3</div>
     <h2>Mode B: the sender waits, and the plot host connects.</h2>
-    <div class="recipe">
+    <div class="recipe three">
       <div class="card role sender">
-        <h3>Robot / Pi / DAQ</h3>
+        <h3>🤖 Sender device</h3>
         <ul>
+          <li>🤖 Robot, 🍓 Pi, DAQ, or 💻 laptop.</li>
           <li>Has the stable IP address.</li>
           <li>Sender binds data/control sockets.</li>
-          <li>Publishes from the experiment loop.</li>
         </ul>
       </div>
       <div class="card role">
-        <h3>Laptop / workstation</h3>
+        <h3>💻 Plot host device</h3>
         <ul>
+          <li>💻 Laptop or 🖥️ workstation.</li>
           <li>Runs <code>rtplot-server -p &lt;sender-ip&gt;</code>.</li>
           <li>Connects out to the sender endpoint.</li>
           <li>Still serves the browser on <code>:8050</code>.</li>
+        </ul>
+      </div>
+      <div class="card role viewer">
+        <h3>👀 Viewer device</h3>
+        <ul>
+          <li>💻 Laptop, 📱 phone, tablet, or 🖥️ display.</li>
+          <li>Opens the plot host URL.</li>
         </ul>
       </div>
     </div>
@@ -1229,17 +1235,17 @@ batch_size = <span class="py-num">50</span>
     <div class="flow two">
       <div class="node">
         <strong>Phone / tablet / second laptop</strong>
-        <span>Browser only</span>
+        <span>👀 viewer device</span>
       </div>
       <div class="arrow">→</div>
       <div class="node">
         <strong>Plot host</strong>
-        <span><code>http://&lt;lan-ip&gt;:8050</code></span>
+        <span>💻 laptop or 🖥️ workstation</span>
       </div>
     </div>
     <div class="card">
       <ul>
-        <li>Open the plot host LAN IP from the viewer.</li>
+        <li>Open <code>http://&lt;plot-host-lan-ip&gt;:8050</code> from the viewer device.</li>
         <li>Allow inbound TCP <code>8050</code> through the host firewall.</li>
         <li>Do not expose <code>5555</code> or <code>5556</code> to viewers.</li>
       </ul>
@@ -1252,7 +1258,7 @@ batch_size = <span class="py-num">50</span>
     <div class="two-col">
       <div class="card">
         <h3>Why</h3>
-        <p>WSL2 localhost forwarding helps the Windows host, but LAN devices need Windows to forward traffic into the WSL VM.</p>
+        <p>LAN 👀 viewer devices need the Windows host to forward <code>:8050</code> into the WSL VM.</p>
       </div>
       <pre><code># PowerShell as Administrator
 $wslIp = (wsl hostname -I).Trim().Split()[0]
@@ -1299,17 +1305,17 @@ Keep the plotting code in one helper function.</code></pre>
     <div class="card">
       <div class="port-row">
         <strong><code>8050</code></strong>
-        <span>HTTP + WebSocket browser UI</span>
+        <span>👀 viewer devices to 💻 plot host</span>
         <span class="pill">open to viewers</span>
       </div>
       <div class="port-row">
         <strong><code>5555</code></strong>
-        <span>ZMQ data: sender to plot host</span>
+        <span>🤖 sender device to 💻 plot host</span>
         <span class="pill">sender/host only</span>
       </div>
       <div class="port-row">
         <strong><code>5556</code></strong>
-        <span>ZMQ controls: plot host to sender</span>
+        <span>💻 plot host to 🤖 sender device</span>
         <span class="pill">sender/host only</span>
       </div>
     </div>
