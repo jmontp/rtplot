@@ -1,0 +1,1273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>rtplot Lab Presentation</title>
+<style>
+  :root {
+    --bg: #101216;
+    --panel: #181c22;
+    --panel-2: #202733;
+    --text: #eef2f7;
+    --muted: #9ea9b8;
+    --line: #394353;
+    --accent: #42c7b7;
+    --accent-2: #f2b84b;
+    --accent-3: #ee6f73;
+    --blue: #6aa5ff;
+    --green: #82cf73;
+    --code: #0b0e13;
+    --shadow: rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    letter-spacing: 0;
+  }
+
+  body {
+    display: grid;
+    grid-template-rows: 1fr auto;
+  }
+
+  .deck {
+    position: relative;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: none;
+    padding: 5.5vh 6.2vw 8vh;
+    background:
+      linear-gradient(90deg, rgba(66, 199, 183, 0.06), transparent 34%),
+      linear-gradient(180deg, #12151a 0%, #0d0f13 100%);
+  }
+
+  .slide.active {
+    display: grid;
+    align-content: center;
+    gap: 28px;
+  }
+
+  .slide.compact { align-content: start; padding-top: 5vh; }
+
+  h1, h2, h3, p { margin: 0; }
+
+  h1 {
+    font-size: clamp(54px, 7.5vw, 108px);
+    line-height: 0.95;
+    max-width: 1050px;
+    font-weight: 760;
+  }
+
+  h2 {
+    font-size: clamp(38px, 4.8vw, 72px);
+    line-height: 1.02;
+    max-width: 1120px;
+    font-weight: 720;
+  }
+
+  h3 {
+    color: var(--accent);
+    font-size: clamp(20px, 2.1vw, 32px);
+    font-weight: 680;
+  }
+
+  p, li {
+    font-size: clamp(21px, 2vw, 31px);
+    line-height: 1.28;
+  }
+
+  .kicker {
+    color: var(--accent);
+    font-size: clamp(18px, 1.6vw, 24px);
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .subhead {
+    color: var(--muted);
+    max-width: 980px;
+    font-size: clamp(24px, 2.3vw, 34px);
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+    gap: 36px;
+    align-items: stretch;
+  }
+
+  .three-col {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 22px;
+  }
+
+  .stack { display: grid; gap: 18px; }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 24px;
+    box-shadow: 0 14px 36px var(--shadow);
+  }
+
+  .card h3 { margin-bottom: 12px; }
+
+  .card p, .card li {
+    font-size: clamp(19px, 1.6vw, 25px);
+    color: #d8dee7;
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 1.1em;
+    display: grid;
+    gap: 12px;
+  }
+
+  .tight-list { gap: 8px; }
+
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 0.86em;
+    color: #d7fff6;
+  }
+
+  pre {
+    margin: 0;
+    padding: 22px 24px;
+    background: var(--code);
+    border: 1px solid #2e3847;
+    border-radius: 8px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 16px 34px var(--shadow);
+    overflow: hidden;
+  }
+
+  pre code {
+    display: block;
+    white-space: pre-wrap;
+    font-size: clamp(15px, 1.18vw, 21px);
+    line-height: 1.38;
+    color: #e9edf3;
+  }
+
+  .code-sample pre {
+    max-height: 52vh;
+    overflow: auto;
+  }
+
+  .code-sample .two-col {
+    grid-template-columns: minmax(280px, 0.78fr) minmax(0, 1.22fr);
+    gap: 24px;
+  }
+
+  .code-sample pre code {
+    font-size: clamp(10px, 0.72vw, 14px);
+    line-height: 1.32;
+  }
+
+  .py-comment { color: #8b96a7; }
+  .py-doc { color: #82cf73; }
+  .py-key { color: #f2b84b; font-weight: 700; }
+  .py-str { color: #8fd7ff; }
+  .py-num { color: #ee9a6a; }
+  .py-call { color: #42c7b7; }
+  .py-name { color: #dce7f5; }
+
+  .diagram {
+    display: grid;
+    gap: 18px;
+    align-content: center;
+  }
+
+  .flow {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    gap: 14px;
+    align-items: center;
+  }
+
+  .flow.two {
+    grid-template-columns: 1fr auto 1fr;
+  }
+
+  .context-flow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+  }
+
+  .context-node {
+    min-height: 74px;
+    display: grid;
+    align-content: center;
+    gap: 3px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    background: rgba(32, 39, 51, 0.72);
+    border: 1px solid #394353;
+    opacity: 0.58;
+  }
+
+  .context-node strong {
+    font-size: clamp(18px, 1.5vw, 24px);
+  }
+
+  .context-node span {
+    color: var(--muted);
+    font-size: clamp(13px, 1vw, 17px);
+  }
+
+  .context-node.active {
+    opacity: 1;
+    background: rgba(66, 199, 183, 0.16);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px rgba(66, 199, 183, 0.35), 0 12px 26px rgba(0, 0, 0, 0.24);
+  }
+
+  .context-node.active.server {
+    background: rgba(242, 184, 75, 0.15);
+    border-color: var(--accent-2);
+    box-shadow: 0 0 0 1px rgba(242, 184, 75, 0.32), 0 12px 26px rgba(0, 0, 0, 0.24);
+  }
+
+  .context-node.active.viewer {
+    background: rgba(106, 165, 255, 0.15);
+    border-color: var(--blue);
+    box-shadow: 0 0 0 1px rgba(106, 165, 255, 0.32), 0 12px 26px rgba(0, 0, 0, 0.24);
+  }
+
+  .context-arrow {
+    color: var(--muted);
+    font-size: clamp(22px, 2vw, 34px);
+    font-weight: 800;
+  }
+
+  .context-arrow.active {
+    color: var(--accent);
+  }
+
+  .node {
+    min-height: 132px;
+    display: grid;
+    align-content: center;
+    gap: 8px;
+    padding: 20px;
+    border-radius: 8px;
+    background: var(--panel-2);
+    border: 1px solid #465164;
+  }
+
+  .node.client {
+    background: rgba(66, 199, 183, 0.16);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px rgba(66, 199, 183, 0.35), 0 12px 26px rgba(0, 0, 0, 0.24);
+  }
+
+  .node.server {
+    background: rgba(242, 184, 75, 0.15);
+    border-color: var(--accent-2);
+    box-shadow: 0 0 0 1px rgba(242, 184, 75, 0.32), 0 12px 26px rgba(0, 0, 0, 0.24);
+  }
+
+  .node.viewer {
+    background: rgba(106, 165, 255, 0.15);
+    border-color: var(--blue);
+    box-shadow: 0 0 0 1px rgba(106, 165, 255, 0.32), 0 12px 26px rgba(0, 0, 0, 0.24);
+  }
+
+  .node strong {
+    font-size: clamp(24px, 2.2vw, 34px);
+  }
+
+  .node span {
+    color: var(--muted);
+    font-size: clamp(17px, 1.4vw, 23px);
+  }
+
+  .arrow {
+    color: var(--accent);
+    font-size: clamp(36px, 3.4vw, 52px);
+    font-weight: 800;
+  }
+
+  .port-row {
+    display: grid;
+    grid-template-columns: 130px 1fr 210px;
+    gap: 18px;
+    align-items: center;
+    border-top: 1px solid var(--line);
+    padding: 14px 0;
+    font-size: clamp(20px, 1.6vw, 27px);
+  }
+
+  .port-row:first-child { border-top: 0; }
+
+  .pill {
+    display: inline-flex;
+    width: fit-content;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(66, 199, 183, 0.14);
+    border: 1px solid rgba(66, 199, 183, 0.5);
+    color: #dffffb;
+    font-size: clamp(16px, 1.2vw, 20px);
+    font-weight: 650;
+  }
+
+  .recipe {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 22px;
+  }
+
+  .role {
+    border-left: 5px solid var(--accent);
+  }
+
+  .role.sender { border-left-color: var(--accent-2); }
+  .role.viewer { border-left-color: var(--blue); }
+
+  .mini-browser {
+    background: #f6f8fb;
+    color: #111;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #8591a3;
+    min-height: 286px;
+  }
+
+  .browser-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    height: 36px;
+    padding: 0 12px;
+    background: #dfe5ee;
+    border-bottom: 1px solid #c6ceda;
+  }
+
+  .dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--accent-3);
+  }
+
+  .dot:nth-child(2) { background: var(--accent-2); }
+  .dot:nth-child(3) { background: var(--green); }
+
+  .plot {
+    height: 250px;
+    padding: 20px 22px;
+    background:
+      linear-gradient(#e2e8f0 1px, transparent 1px),
+      linear-gradient(90deg, #e2e8f0 1px, transparent 1px);
+    background-size: 44px 44px;
+    position: relative;
+  }
+
+  .trace {
+    position: absolute;
+    left: 18px;
+    right: 18px;
+    top: 30px;
+    bottom: 30px;
+  }
+
+  .trace svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .footer {
+    position: absolute;
+    left: 6.2vw;
+    right: 6.2vw;
+    bottom: 3.2vh;
+    display: flex;
+    justify-content: space-between;
+    color: #788395;
+    font-size: 15px;
+  }
+
+  .progress {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    height: 5px;
+    width: 100%;
+    background: #232936;
+    z-index: 10;
+  }
+
+  .progress span {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+  }
+
+  .controls {
+    position: fixed;
+    right: 24px;
+    bottom: 18px;
+    display: flex;
+    gap: 8px;
+    z-index: 11;
+  }
+
+  button {
+    width: 38px;
+    height: 34px;
+    border: 1px solid #556174;
+    border-radius: 6px;
+    color: var(--text);
+    background: #1a202b;
+    cursor: pointer;
+    font-size: 20px;
+  }
+
+  button:hover { background: #263143; }
+
+  a {
+    color: #8fd7ff;
+    text-decoration: none;
+  }
+
+  a:hover { text-decoration: underline; }
+
+  .badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  @media (max-width: 900px) {
+    .slide { padding: 4vh 5vw 7vh; overflow-y: auto; }
+    .slide.active { align-content: start; }
+    .two-col, .three-col, .recipe { grid-template-columns: 1fr; }
+    .flow, .flow.two, .context-flow { grid-template-columns: 1fr; }
+    .arrow { transform: rotate(90deg); justify-self: center; }
+    .context-arrow { transform: rotate(90deg); justify-self: center; }
+    .port-row { grid-template-columns: 1fr; gap: 6px; }
+    .controls { display: none; }
+  }
+</style>
+</head>
+<body>
+<main class="deck" aria-live="polite">
+  <section class="slide active">
+    <div class="kicker">Lab Project Overview</div>
+    <h1>rtplot</h1>
+    <p class="subhead">Real-time plotting and browser-based controls for Python scripts running locally or across the lab network.</p>
+    <div class="badge-row">
+      <span class="pill">Python client</span>
+      <span class="pill">ZMQ transport</span>
+      <span class="pill">Browser viewer</span>
+      <span class="pill">Live controls</span>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Problem</div>
+    <h2>Experiments need live visibility without dragging a full GUI stack into every script.</h2>
+    <div class="three-col">
+      <div class="card">
+        <h3>Fast iteration</h3>
+        <p>Plot state, commands, errors, torques, sensor values, and debug signals while the script is running.</p>
+      </div>
+      <div class="card">
+        <h3>Remote machines</h3>
+        <p>The data source might be a robot, Raspberry Pi, DAQ box, WSL instance, or laptop on Wi-Fi.</p>
+      </div>
+      <div class="card">
+        <h3>Low ceremony</h3>
+        <p>The plotting setup should be a few client calls, not a new app framework.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Architecture</div>
+    <h2>Three parts: client, server, viewers.</h2>
+    <div class="diagram">
+      <div class="flow">
+        <div class="node client">
+          <strong>Client</strong>
+          <span>Your Python script</span>
+          <span><code>send_array()</code> and <code>poll_controls()</code></span>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node server">
+          <strong>Server</strong>
+          <span>rtplot plot host</span>
+          <span>ZMQ in, WebSocket out</span>
+        </div>
+        <div class="arrow">→</div>
+        <div class="node viewer">
+          <strong>Viewers</strong>
+          <span>Browser tabs</span>
+          <span>Local, laptop, phone, live demos</span>
+        </div>
+      </div>
+      <div class="card">
+        <p>Data flows client to server on <code>5555</code>. Controls flow server to client on <code>5556</code>. The browser UI is served from <code>8050</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Part 1</div>
+    <h2>The client lives inside the experiment script.</h2>
+    <div class="context-flow">
+      <div class="context-node active">
+        <strong>Client</strong>
+        <span>Python script</span>
+      </div>
+      <div class="context-arrow active">→</div>
+      <div class="context-node server">
+        <strong>Server</strong>
+        <span>Plot host</span>
+      </div>
+      <div class="context-arrow">→</div>
+      <div class="context-node viewer">
+        <strong>Viewers</strong>
+        <span>Browser tabs</span>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <h3>What it owns</h3>
+        <ul>
+          <li>Server endpoint selection</li>
+          <li>Plot layout declaration</li>
+          <li>Data publishing</li>
+          <li>Control polling</li>
+          <li>Browser control polling</li>
+        </ul>
+      </div>
+      <pre><code>from rtplot import client
+
+client.local_plot()
+client.initialize_plots(["signal"])
+
+while running:
+    y = get_next_sample()
+    client.send_array(y)</code></pre>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Part 2</div>
+    <h2>The server is the plot host.</h2>
+    <div class="context-flow">
+      <div class="context-node">
+        <strong>Client</strong>
+        <span>Python script</span>
+      </div>
+      <div class="context-arrow active">→</div>
+      <div class="context-node active server">
+        <strong>Server</strong>
+        <span>Plot host</span>
+      </div>
+      <div class="context-arrow active">→</div>
+      <div class="context-node viewer">
+        <strong>Viewers</strong>
+        <span>Browser tabs</span>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <h3>Responsibilities</h3>
+        <ul>
+          <li>Receives data/config from one or more clients.</li>
+          <li>Hosts the browser UI.</li>
+          <li>Streams binary deltas to viewers.</li>
+          <li>Sends widget events back to the script.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Presentation assumption</h3>
+        <p>The server is already running before the client examples are launched. The deck focuses on the client script that publishes data and polls controls.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Part 3</div>
+    <h2>Viewers are just browser tabs.</h2>
+    <div class="context-flow">
+      <div class="context-node">
+        <strong>Client</strong>
+        <span>Python script</span>
+      </div>
+      <div class="context-arrow">→</div>
+      <div class="context-node server">
+        <strong>Server</strong>
+        <span>Plot host</span>
+      </div>
+      <div class="context-arrow active">→</div>
+      <div class="context-node active viewer">
+        <strong>Viewers</strong>
+        <span>Browser tabs</span>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="mini-browser">
+        <div class="browser-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        <div class="plot">
+          <div class="trace">
+            <svg viewBox="0 0 700 220" preserveAspectRatio="none" aria-hidden="true">
+              <path d="M0,140 C70,40 120,210 190,110 C260,10 330,195 400,95 C470,0 540,210 610,92 C650,52 680,76 700,64" fill="none" stroke="#0e7cc9" stroke-width="5" />
+              <path d="M0,160 C90,145 140,110 210,155 C300,215 360,55 430,120 C520,210 570,35 700,150" fill="none" stroke="#ef6c4e" stroke-width="4" />
+            </svg>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Viewer modes</h3>
+        <ul>
+          <li>Open <code>localhost:8050</code> on the plot host.</li>
+          <li>Open <code>http://&lt;plot-host-ip&gt;:8050</code> from another device.</li>
+          <li>Open the same live plot from multiple browser tabs.</li>
+          <li>No Python required for viewers.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Data Flow</div>
+    <h2>A single loop can plot data and consume browser controls.</h2>
+    <div class="context-flow">
+      <div class="context-node active">
+        <strong>Client</strong>
+        <span>send + poll</span>
+      </div>
+      <div class="context-arrow active">↔</div>
+      <div class="context-node active server">
+        <strong>Server</strong>
+        <span>bridge</span>
+      </div>
+      <div class="context-arrow active">↔</div>
+      <div class="context-node active viewer">
+        <strong>Viewers</strong>
+        <span>plot + controls</span>
+      </div>
+    </div>
+    <div class="flow">
+      <div class="node">
+        <strong>Python loop</strong>
+        <span>Computes sample</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node">
+        <strong>rtplot server</strong>
+        <span>Receives array and control state</span>
+      </div>
+      <div class="arrow">↔</div>
+      <div class="node">
+        <strong>Browser</strong>
+        <span>Draws plot, emits widget events</span>
+      </div>
+    </div>
+    <pre><code>ctrl = client.poll_controls()
+gain = ctrl.values.get("gain", 1.0)
+client.send_array(gain * signal)</code></pre>
+  </section>
+
+  <section class="slide compact code-sample">
+    <div class="kicker">Client Example 1</div>
+    <h2><code>presentation/examples/01_sine_stream.py</code></h2>
+    <div class="context-flow">
+      <div class="context-node active">
+        <strong>Client</strong>
+        <span>this script</span>
+      </div>
+      <div class="context-arrow active">→</div>
+      <div class="context-node server">
+        <strong>Server</strong>
+        <span>already running</span>
+      </div>
+      <div class="context-arrow">→</div>
+      <div class="context-node viewer">
+        <strong>Viewers</strong>
+        <span>browser</span>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <h3>What this file demonstrates</h3>
+        <ul>
+          <li>The minimum end-to-end client flow.</li>
+          <li>Connect to the local plot host.</li>
+          <li>Declare one named trace with fixed axes.</li>
+          <li>Stream samples at roughly 100 Hz.</li>
+        </ul>
+      </div>
+      <pre><code><span class="py-doc">"""End-to-end client example: stream a live sine wave.
+
+Start the rtplot server yourself first, then run:
+
+    python presentation/examples/01_sine_stream.py
+"""</span>
+
+<span class="py-key">import</span> math
+<span class="py-key">import</span> time
+
+<span class="py-key">from</span> rtplot <span class="py-key">import</span> client
+
+
+VIEWER = <span class="py-str">"http://127.0.0.1:8050"</span>
+
+
+client.<span class="py-call">local_plot</span>()
+client.<span class="py-call">initialize_plots</span>([
+    {
+        <span class="py-str">"names"</span>: [<span class="py-str">"sine"</span>],
+        <span class="py-str">"title"</span>: <span class="py-str">"End-to-end sine stream"</span>,
+        <span class="py-str">"ylabel"</span>: <span class="py-str">"amplitude"</span>,
+        <span class="py-str">"yrange"</span>: [-<span class="py-num">1.2</span>, <span class="py-num">1.2</span>],
+        <span class="py-str">"xrange"</span>: <span class="py-num">300</span>,
+    }
+])
+
+<span class="py-call">print</span>(<span class="py-str">"Open"</span>, VIEWER, <span class="py-str">"to see the live plot."</span>)
+<span class="py-key">for</span> i <span class="py-key">in</span> <span class="py-call">range</span>(<span class="py-num">600</span>):
+    t = i * <span class="py-num">0.01</span>
+    client.<span class="py-call">send_array</span>(math.<span class="py-call">sin</span>(<span class="py-num">2</span> * math.pi * <span class="py-num">1.5</span> * t))
+    time.<span class="py-call">sleep</span>(<span class="py-num">0.01</span>)
+<span class="py-call">print</span>(<span class="py-str">"Sent 600 samples."</span>)</code></pre>
+    </div>
+  </section>
+
+  <section class="slide compact code-sample">
+    <div class="kicker">Client Example 2</div>
+    <h2><code>presentation/examples/02_gait_subplots.py</code></h2>
+    <div class="context-flow">
+      <div class="context-node active">
+        <strong>Client</strong>
+        <span>this script</span>
+      </div>
+      <div class="context-arrow active">→</div>
+      <div class="context-node server">
+        <strong>Server</strong>
+        <span>already running</span>
+      </div>
+      <div class="context-arrow">→</div>
+      <div class="context-node viewer">
+        <strong>Viewers</strong>
+        <span>browser</span>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <h3>What this file demonstrates</h3>
+        <ul>
+          <li>Multiple plots declared from one client script.</li>
+          <li>Multiple named traces per plot.</li>
+          <li>Domain-specific labels, colors, and y ranges.</li>
+          <li>A flat <code>send_array</code> call carrying all traces.</li>
+        </ul>
+      </div>
+      <pre><code><span class="py-doc">"""End-to-end client example: stream a multi-subplot robot-style layout.
+
+Start the rtplot server yourself first, then run:
+
+    python presentation/examples/02_gait_subplots.py
+"""</span>
+
+<span class="py-key">import</span> math
+<span class="py-key">import</span> time
+
+<span class="py-key">from</span> rtplot <span class="py-key">import</span> client
+
+
+VIEWER = <span class="py-str">"http://127.0.0.1:8050"</span>
+
+
+client.<span class="py-call">local_plot</span>()
+client.<span class="py-call">initialize_plots</span>([
+    {
+        <span class="py-str">"names"</span>: [<span class="py-str">"hip"</span>, <span class="py-str">"knee"</span>, <span class="py-str">"ankle"</span>],
+        <span class="py-str">"title"</span>: <span class="py-str">"Joint angles"</span>,
+        <span class="py-str">"ylabel"</span>: <span class="py-str">"deg"</span>,
+        <span class="py-str">"yrange"</span>: [-<span class="py-num">80</span>, <span class="py-num">80</span>],
+        <span class="py-str">"xrange"</span>: <span class="py-num">350</span>,
+        <span class="py-str">"colors"</span>: [<span class="py-str">"#42c7b7"</span>, <span class="py-str">"#f2b84b"</span>, <span class="py-str">"#ee6f73"</span>],
+    },
+    {
+        <span class="py-str">"names"</span>: [<span class="py-str">"command"</span>, <span class="py-str">"measured"</span>],
+        <span class="py-str">"title"</span>: <span class="py-str">"Torque tracking"</span>,
+        <span class="py-str">"ylabel"</span>: <span class="py-str">"Nm/kg"</span>,
+        <span class="py-str">"yrange"</span>: [-<span class="py-num">2.5</span>, <span class="py-num">2.5</span>],
+        <span class="py-str">"xrange"</span>: <span class="py-num">350</span>,
+        <span class="py-str">"colors"</span>: [<span class="py-str">"#6aa5ff"</span>, <span class="py-str">"#82cf73"</span>],
+    },
+])
+
+<span class="py-call">print</span>(<span class="py-str">"Open"</span>, VIEWER, <span class="py-str">"to see the live plot."</span>)
+<span class="py-key">for</span> i <span class="py-key">in</span> <span class="py-call">range</span>(<span class="py-num">700</span>):
+    t = i * <span class="py-num">0.01</span>
+    hip = <span class="py-num">35</span> * math.<span class="py-call">sin</span>(<span class="py-num">2</span> * math.pi * <span class="py-num">0.8</span> * t)
+    knee = <span class="py-num">55</span> * math.<span class="py-call">sin</span>(<span class="py-num">2</span> * math.pi * <span class="py-num">0.8</span> * t + <span class="py-num">1.1</span>)
+    ankle = <span class="py-num">22</span> * math.<span class="py-call">sin</span>(<span class="py-num">2</span> * math.pi * <span class="py-num">0.8</span> * t - <span class="py-num">0.7</span>)
+    command = <span class="py-num">1.4</span> * math.<span class="py-call">sin</span>(<span class="py-num">2</span> * math.pi * <span class="py-num">0.8</span> * t)
+    measured = command + <span class="py-num">0.25</span> * math.<span class="py-call">sin</span>(<span class="py-num">2</span> * math.pi * <span class="py-num">4.0</span> * t)
+    client.<span class="py-call">send_array</span>([hip, knee, ankle, command, measured])
+    time.<span class="py-call">sleep</span>(<span class="py-num">0.01</span>)
+<span class="py-call">print</span>(<span class="py-str">"Sent gait-style subplot stream."</span>)</code></pre>
+    </div>
+  </section>
+
+  <section class="slide compact code-sample">
+    <div class="kicker">Client Example 3</div>
+    <h2><code>presentation/examples/03_interactive_controls.py</code></h2>
+    <div class="context-flow">
+      <div class="context-node active">
+        <strong>Client</strong>
+        <span>this script</span>
+      </div>
+      <div class="context-arrow active">↔</div>
+      <div class="context-node server">
+        <strong>Server</strong>
+        <span>already running</span>
+      </div>
+      <div class="context-arrow">↔</div>
+      <div class="context-node viewer">
+        <strong>Viewers</strong>
+        <span>controls</span>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <h3>What this file demonstrates</h3>
+        <ul>
+          <li>Controls declared in the same plot layout as data traces.</li>
+          <li>Button, slider, dial, numeric display, and text status widgets.</li>
+          <li><code>poll_controls()</code> as a nonblocking part of the loop.</li>
+          <li>Script-to-browser status updates with <code>set_display()</code>.</li>
+        </ul>
+      </div>
+      <pre><code><span class="py-doc">"""End-to-end client example: browser controls affect the Python loop.
+
+Start the rtplot server yourself first, then run:
+
+    python presentation/examples/03_interactive_controls.py
+
+Open http://127.0.0.1:8050, then drag Gain/Frequency or press Reset.
+"""</span>
+
+<span class="py-key">import</span> math
+<span class="py-key">import</span> time
+
+<span class="py-key">from</span> rtplot <span class="py-key">import</span> client
+
+
+VIEWER = <span class="py-str">"http://127.0.0.1:8050"</span>
+
+
+client.<span class="py-call">local_plot</span>()
+client.<span class="py-call">initialize_plots</span>([
+    {
+        <span class="py-str">"names"</span>: [<span class="py-str">"controlled signal"</span>],
+        <span class="py-str">"title"</span>: <span class="py-str">"Interactive signal"</span>,
+        <span class="py-str">"ylabel"</span>: <span class="py-str">"amplitude"</span>,
+        <span class="py-str">"yrange"</span>: [-<span class="py-num">5.5</span>, <span class="py-num">5.5</span>],
+        <span class="py-str">"xrange"</span>: <span class="py-num">300</span>,
+    },
+    {
+        <span class="py-str">"controls"</span>: [
+            {<span class="py-str">"type"</span>: <span class="py-str">"button"</span>, <span class="py-str">"id"</span>: <span class="py-str">"reset"</span>, <span class="py-str">"label"</span>: <span class="py-str">"Reset phase"</span>},
+            {
+                <span class="py-str">"type"</span>: <span class="py-str">"slider"</span>, <span class="py-str">"id"</span>: <span class="py-str">"gain"</span>, <span class="py-str">"label"</span>: <span class="py-str">"Gain"</span>,
+                <span class="py-str">"min"</span>: <span class="py-num">0</span>, <span class="py-str">"max"</span>: <span class="py-num">5</span>, <span class="py-str">"value"</span>: <span class="py-num">1.0</span>, <span class="py-str">"step"</span>: <span class="py-num">0.1</span>,
+                <span class="py-str">"format"</span>: <span class="py-str">"{:.1f}"</span>,
+            },
+            {
+                <span class="py-str">"type"</span>: <span class="py-str">"dial"</span>, <span class="py-str">"id"</span>: <span class="py-str">"freq"</span>, <span class="py-str">"label"</span>: <span class="py-str">"Frequency"</span>,
+                <span class="py-str">"min"</span>: <span class="py-num">0.2</span>, <span class="py-str">"max"</span>: <span class="py-num">4.0</span>, <span class="py-str">"value"</span>: <span class="py-num">1.0</span>, <span class="py-str">"step"</span>: <span class="py-num">0.1</span>,
+                <span class="py-str">"format"</span>: <span class="py-str">"{:.1f}"</span>,
+            },
+            {<span class="py-str">"type"</span>: <span class="py-str">"display"</span>, <span class="py-str">"id"</span>: <span class="py-str">"elapsed"</span>, <span class="py-str">"label"</span>: <span class="py-str">"Elapsed"</span>, <span class="py-str">"format"</span>: <span class="py-str">"{:.1f}"</span>},
+            {<span class="py-str">"type"</span>: <span class="py-str">"text"</span>, <span class="py-str">"id"</span>: <span class="py-str">"status"</span>, <span class="py-str">"label"</span>: <span class="py-str">"Status"</span>, <span class="py-str">"value"</span>: <span class="py-str">"running"</span>},
+        ]
+    },
+])
+
+<span class="py-call">print</span>(<span class="py-str">"Open"</span>, VIEWER, <span class="py-str">"and interact with the controls for 12 seconds."</span>)
+phase_t0 = time.<span class="py-call">time</span>()
+end = time.<span class="py-call">time</span>() + <span class="py-num">12</span>
+<span class="py-key">while</span> time.<span class="py-call">time</span>() &lt; end:
+    ctrl = client.<span class="py-call">poll_controls</span>()
+    <span class="py-key">if</span> <span class="py-str">"reset"</span> <span class="py-key">in</span> ctrl.buttons:
+        phase_t0 = time.<span class="py-call">time</span>()
+        <span class="py-call">print</span>(<span class="py-str">"Reset button received"</span>)
+    gain = ctrl.values.<span class="py-call">get</span>(<span class="py-str">"gain"</span>, <span class="py-num">1.0</span>)
+    freq = ctrl.values.<span class="py-call">get</span>(<span class="py-str">"freq"</span>, <span class="py-num">1.0</span>)
+    elapsed = time.<span class="py-call">time</span>() - phase_t0
+    y = gain * math.<span class="py-call">sin</span>(<span class="py-num">2</span> * math.pi * freq * elapsed)
+    client.<span class="py-call">set_display</span>(<span class="py-str">"elapsed"</span>, elapsed)
+    client.<span class="py-call">set_display</span>(<span class="py-str">"status"</span>, <span class="py-str">"gain={:.1f}, freq={:.1f}"</span>.<span class="py-call">format</span>(gain, freq))
+    client.<span class="py-call">send_array</span>(y)
+    time.<span class="py-call">sleep</span>(<span class="py-num">0.01</span>)
+<span class="py-call">print</span>(<span class="py-str">"Interactive run finished."</span>)</code></pre>
+    </div>
+  </section>
+
+  <section class="slide compact code-sample">
+    <div class="kicker">Client Example 4</div>
+    <h2><code>presentation/examples/04_batched_sender.py</code></h2>
+    <div class="context-flow">
+      <div class="context-node active">
+        <strong>Client</strong>
+        <span>this script</span>
+      </div>
+      <div class="context-arrow active">→</div>
+      <div class="context-node server">
+        <strong>Server</strong>
+        <span>already running</span>
+      </div>
+      <div class="context-arrow">→</div>
+      <div class="context-node viewer">
+        <strong>Viewers</strong>
+        <span>browser</span>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <h3>What this file demonstrates</h3>
+        <ul>
+          <li>High-rate samples sent in efficient chunks.</li>
+          <li>A 2-D numpy array shaped as traces by samples.</li>
+          <li>Two traces updated from one <code>send_array()</code> call.</li>
+          <li>Useful when the producer runs faster than browser repaint.</li>
+        </ul>
+      </div>
+      <pre><code><span class="py-doc">"""End-to-end client example: send batched numpy arrays.
+
+Start the rtplot server yourself first, then run:
+
+    python presentation/examples/04_batched_sender.py
+"""</span>
+
+<span class="py-key">import</span> time
+
+<span class="py-key">import</span> numpy <span class="py-key">as</span> np
+
+<span class="py-key">from</span> rtplot <span class="py-key">import</span> client
+
+
+VIEWER = <span class="py-str">"http://127.0.0.1:8050"</span>
+
+
+client.<span class="py-call">local_plot</span>()
+client.<span class="py-call">initialize_plots</span>([
+    {
+        <span class="py-str">"names"</span>: [<span class="py-str">"fast sine"</span>, <span class="py-str">"fast cosine"</span>],
+        <span class="py-str">"title"</span>: <span class="py-str">"Batched sender"</span>,
+        <span class="py-str">"yrange"</span>: [-<span class="py-num">1.2</span>, <span class="py-num">1.2</span>],
+        <span class="py-str">"xrange"</span>: <span class="py-num">600</span>,
+    }
+])
+
+<span class="py-call">print</span>(<span class="py-str">"Open"</span>, VIEWER, <span class="py-str">"to see batched updates."</span>)
+sample_rate = <span class="py-num">1000</span>
+batch_size = <span class="py-num">50</span>
+<span class="py-key">for</span> batch <span class="py-key">in</span> <span class="py-call">range</span>(<span class="py-num">120</span>):
+    idx = np.<span class="py-call">arange</span>(batch * batch_size, (batch + <span class="py-num">1</span>) * batch_size)
+    t = idx / sample_rate
+    data = np.<span class="py-call">vstack</span>([
+        np.<span class="py-call">sin</span>(<span class="py-num">2</span> * np.pi * <span class="py-num">2.0</span> * t),
+        np.<span class="py-call">cos</span>(<span class="py-num">2</span> * np.pi * <span class="py-num">2.0</span> * t),
+    ])
+    client.<span class="py-call">send_array</span>(data)
+    time.<span class="py-call">sleep</span>(batch_size / sample_rate)
+<span class="py-call">print</span>(<span class="py-str">"Sent"</span>, <span class="py-num">120</span> * batch_size, <span class="py-str">"samples as numpy batches."</span>)</code></pre>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Networking 1</div>
+    <h2>Everything local</h2>
+    <div class="flow">
+      <div class="node">
+        <strong>Python client</strong>
+        <span><code>127.0.0.1:5555</code></span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node">
+        <strong>Server</strong>
+        <span>same machine</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node">
+        <strong>Browser</strong>
+        <span><code>localhost:8050</code></span>
+      </div>
+    </div>
+    <div class="card">
+      <p>Best for development, debugging examples, and quick plots while writing code.</p>
+    </div>
+  </section>
+
+  <section class="slide compact">
+    <div class="kicker">Networking 2</div>
+    <h2>Mode A: laptop plot host binds</h2>
+    <div class="recipe">
+      <div class="card role">
+        <h3>Laptop</h3>
+        <ul>
+          <li>Already running as the plot host.</li>
+          <li>Binds data/control sockets.</li>
+          <li>Hosts <code>localhost:8050</code>.</li>
+        </ul>
+      </div>
+      <div class="card role sender">
+        <h3>Robot / Pi / DAQ</h3>
+        <ul>
+          <li>Runs the Python client script.</li>
+          <li>Calls <code>configure_ip("&lt;laptop-ip&gt;")</code>.</li>
+          <li>Sends data to the laptop.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+      <p>Common lab setup when your laptop is the machine everyone can reach on Wi-Fi.</p>
+    </div>
+  </section>
+
+  <section class="slide compact">
+    <div class="kicker">Networking 3</div>
+    <h2>Mode B: sender binds, laptop connects</h2>
+    <div class="recipe">
+      <div class="card role sender">
+        <h3>Robot / Pi / DAQ</h3>
+        <ul>
+          <li>Has the stable IP address.</li>
+          <li>Client binds data/control sockets.</li>
+          <li>Publishes from the experiment loop.</li>
+        </ul>
+      </div>
+      <div class="card role">
+        <h3>Laptop</h3>
+        <ul>
+          <li>Already running in connect mode.</li>
+          <li>Points at the sender endpoint.</li>
+          <li>Still serves browser UI on <code>8050</code>.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card">
+      <p>The client-side piece is the sender loop publishing data from the machine with the stable address.</p>
+    </div>
+  </section>
+
+  <section class="slide compact">
+    <div class="kicker">Networking 4</div>
+    <h2>Viewer on another device</h2>
+    <div class="flow two">
+      <div class="node">
+        <strong>Phone / tablet / second laptop</strong>
+        <span>Browser only</span>
+      </div>
+      <div class="arrow">→</div>
+      <div class="node">
+        <strong>Plot host</strong>
+        <span><code>http://&lt;lan-ip&gt;:8050</code></span>
+      </div>
+    </div>
+    <div class="card">
+      <ul>
+        <li>Open the plot host LAN IP from the viewer.</li>
+        <li>Allow inbound TCP <code>8050</code> through the host firewall.</li>
+        <li>The viewer does not need the ZMQ ports.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="slide compact">
+    <div class="kicker">Networking 5</div>
+    <h2>WSL2 needs a Windows-side port proxy for LAN viewers.</h2>
+    <div class="two-col">
+      <div class="card">
+        <h3>Why</h3>
+        <p>WSL2 localhost forwarding helps the Windows host, but LAN devices need Windows to forward traffic into the WSL VM.</p>
+      </div>
+      <pre><code># PowerShell as Administrator
+$wslIp = (wsl hostname -I).Trim().Split()[0]
+netsh interface portproxy add v4tov4 `
+    listenport=8050 listenaddress=0.0.0.0 `
+    connectport=8050 connectaddress=$wslIp
+
+New-NetFirewallRule -DisplayName "rtplot wsl" `
+    -Direction Inbound -LocalPort 8050 `
+    -Protocol TCP -Action Allow -Profile Private</code></pre>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">LLM Workflow</div>
+    <h2>How to get LLM agents to make your plots</h2>
+    <div class="two-col">
+      <div class="card">
+        <h3>Give the agent context</h3>
+        <ul>
+          <li>If the agent has internet access, give it the rtplot GitHub link.</li>
+          <li>Ask it to read the README, API reference, and examples.</li>
+          <li>Tell it which signals, units, ranges, and controls you want.</li>
+          <li>Have it generate the client code inside your experiment script.</li>
+        </ul>
+      </div>
+      <pre><code>Use rtplot for this experiment.
+Repo: https://github.com/jmontp/rtplot
+
+Make a live plot with:
+- hip, knee, ankle angles in deg
+- commanded and measured torque in Nm/kg
+- a gain slider from 0 to 5
+- a reset button
+- fixed y ranges where appropriate
+
+Keep the plotting code in one helper function.</code></pre>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Ports</div>
+    <h2>Know which connections matter.</h2>
+    <div class="card">
+      <div class="port-row">
+        <strong><code>8050</code></strong>
+        <span>HTTP + WebSocket browser UI</span>
+        <span class="pill">open to viewers</span>
+      </div>
+      <div class="port-row">
+        <strong><code>5555</code></strong>
+        <span>ZMQ data: sender to server</span>
+        <span class="pill">sender/server only</span>
+      </div>
+      <div class="port-row">
+        <strong><code>5556</code></strong>
+        <span>ZMQ controls: server to sender</span>
+        <span class="pill">sender/server only</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="slide compact">
+    <div class="kicker">Runnable Examples</div>
+    <h2>Keep the deck static; run client scripts from the terminal.</h2>
+    <div class="two-col">
+      <div class="card">
+        <h3>Client examples</h3>
+        <ul>
+          <li><code>presentation/examples/01_sine_stream.py</code></li>
+          <li><code>presentation/examples/02_gait_subplots.py</code></li>
+          <li><code>presentation/examples/03_interactive_controls.py</code></li>
+          <li><code>presentation/examples/04_batched_sender.py</code></li>
+        </ul>
+      </div>
+      <pre><code># Start the rtplot server yourself first.
+
+python presentation/examples/01_sine_stream.py
+python presentation/examples/02_gait_subplots.py
+python presentation/examples/03_interactive_controls.py
+python presentation/examples/04_batched_sender.py</code></pre>
+    </div>
+  </section>
+
+  <section class="slide">
+    <div class="kicker">Close</div>
+    <h2>rtplot keeps plotting close to the script while making the viewer easy to share.</h2>
+    <div class="three-col">
+      <div class="card">
+        <h3>Script-first</h3>
+        <p>Plot config and data stay with the experiment code.</p>
+      </div>
+      <div class="card">
+        <h3>Network-aware</h3>
+        <p>Either side can bind, and viewers only need a browser.</p>
+      </div>
+      <div class="card">
+        <h3>Lab-friendly</h3>
+        <p>Live plots and browser controls cover demos, tuning, and debugging.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="footer">
+  <span>rtplot lab presentation</span>
+  <span id="counter">1 / 20</span>
+</div>
+<div class="controls" aria-label="Slide controls">
+  <button id="prev" type="button" aria-label="Previous slide">‹</button>
+  <button id="next" type="button" aria-label="Next slide">›</button>
+</div>
+<div class="progress" aria-hidden="true"><span id="progress"></span></div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll(".slide"));
+  const counter = document.getElementById("counter");
+  const progress = document.getElementById("progress");
+  let index = 0;
+
+  function showSlide(nextIndex) {
+    index = Math.max(0, Math.min(slides.length - 1, nextIndex));
+    slides.forEach((slide, i) => slide.classList.toggle("active", i === index));
+    counter.textContent = `${index + 1} / ${slides.length}`;
+    progress.style.width = `${((index + 1) / slides.length) * 100}%`;
+    const hash = `#${index + 1}`;
+    if (window.location.hash !== hash) {
+      history.replaceState(null, "", hash);
+    }
+  }
+
+  function slideFromHash() {
+    const value = Number(window.location.hash.replace("#", ""));
+    if (Number.isFinite(value) && value >= 1) {
+      showSlide(value - 1);
+    } else {
+      showSlide(0);
+    }
+  }
+
+  document.getElementById("prev").addEventListener("click", () => showSlide(index - 1));
+  document.getElementById("next").addEventListener("click", () => showSlide(index + 1));
+  window.addEventListener("hashchange", slideFromHash);
+  window.addEventListener("keydown", (event) => {
+    if (["ArrowRight", "PageDown", " "].includes(event.key)) {
+      event.preventDefault();
+      showSlide(index + 1);
+    }
+    if (["ArrowLeft", "PageUp", "Backspace"].includes(event.key)) {
+      event.preventDefault();
+      showSlide(index - 1);
+    }
+    if (event.key === "Home") showSlide(0);
+    if (event.key === "End") showSlide(slides.length - 1);
+  });
+
+  slideFromHash();
+</script>
+</body>
+</html>

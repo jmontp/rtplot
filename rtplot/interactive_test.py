@@ -101,7 +101,7 @@ def step_slider_to(slider_id, label, target, tol=0.25):
 def main():
     # Outbound to the server — the rtplot browser server defaults to binding
     # 5555, so in local-plot mode the client is the one that connects.
-    client.local_plot()
+    # client.local_plot()
 
     plot_cfg = {
         "names": ["live signal"],
