@@ -23,6 +23,8 @@ import asyncio
 import dataclasses
 import json
 import os
+import socket
+import subprocess
 import struct
 import sys
 import time
@@ -36,6 +38,7 @@ from typing import Optional
 import numpy as np
 import zmq
 import zmq.asyncio
+from zmq.utils.monitor import recv_monitor_message
 
 # pyzmq's asyncio integration needs event_loop.add_reader(), which the
 # Windows-default ProactorEventLoop (Python 3.8+) does not implement.
@@ -206,6 +209,7 @@ MSG_DELTA = 1
 
 ZMQ_DEFAULT_PORT = 5555
 ZMQ_CONTROL_PORT = ZMQ_DEFAULT_PORT + 1
+TCP_PROBE_TIMEOUT = 0.5
 
 RECEIVED_PLOT_UPDATE = 0
 RECEIVED_DATA = 1
@@ -262,6 +266,84 @@ def _control_target_from_data(ip):
     return f"{raw}:{ZMQ_CONTROL_PORT}"
 
 
+def _host_port_from_endpoint(endpoint, default_port=ZMQ_DEFAULT_PORT):
+    """Parse ``tcp://host:port`` or ``host[:port]`` into ``(host, port)``."""
+    raw = endpoint.strip()
+    if raw.startswith("tcp://"):
+        raw = raw[len("tcp://"):]
+    if raw.count(":") >= 1:
+        host, port_str = raw.rsplit(":", 1)
+    else:
+        host, port_str = raw, str(default_port)
+    try:
+        port = int(port_str)
+    except ValueError:
+        port = default_port
+    return host, port
+
+
+def _probe_tcp_endpoint(endpoint, timeout=TCP_PROBE_TIMEOUT):
+    """Return ``(open, reachable, error)`` for a TCP endpoint.
+
+    ``Connection refused`` still proves the host answered at the network
+    layer, so it is reachable even though that particular port is closed.
+    """
+    host, port = _host_port_from_endpoint(endpoint)
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True, True, None
+    except ConnectionRefusedError as exc:
+        return False, True, str(exc)
+    except OSError as exc:
+        return False, False, str(exc)
+
+
+def _ping_host(host):
+    """Best-effort host reachability fallback for firewalled TCP ports."""
+    if not host or host == "*":
+        return False
+    if sys.platform == "win32":
+        cmd = ["ping", "-n", "1", "-w", "700", host]
+    else:
+        cmd = ["ping", "-c", "1", "-W", "1", host]
+    try:
+        return subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=1.5,
+            check=False,
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _probe_connect_target(endpoint):
+    """Classify a connect-mode target for the browser status dot.
+
+    Returns ``(host_reachable, rtplot_ports_open, error)``. A reachable host
+    with closed rtplot ports is still a usable tab: ZeroMQ can connect now and
+    auto-complete the connection later when the sender starts listening.
+    """
+    host, data_port = _host_port_from_endpoint(endpoint)
+    data_open, data_reachable, data_err = _probe_tcp_endpoint(endpoint)
+    ctrl_endpoint = _control_target_from_data(endpoint)
+    ctrl_open, ctrl_reachable, ctrl_err = _probe_tcp_endpoint(
+        ctrl_endpoint, timeout=TCP_PROBE_TIMEOUT
+    )
+    host_reachable = data_reachable or ctrl_reachable
+    if not host_reachable and _ping_host(host):
+        host_reachable = True
+    if not host_reachable:
+        return (
+            False,
+            False,
+            f"{host} unreachable (data {data_port}: {data_err}; "
+            f"control {data_port + 1}: {ctrl_err})",
+        )
+    return True, bool(data_open and ctrl_open), None
+
+
 ###############################
 # Tab model #
 ###############################
@@ -274,7 +356,7 @@ class Tab:
     name: str
     mode: str                 # "bind" or "connect"
     endpoint: str             # user-visible label, e.g. "*:5555" or "pi1:5555"
-    status: str = "idle"      # idle | streaming | error
+    status: str = "idle"      # idle | connecting | connected | streaming | error
     error: Optional[str] = None
 
     # Plot state
@@ -302,6 +384,7 @@ class Tab:
     data_sock: Optional[zmq.Socket] = None
     ctrl_sock: Optional[zmq.Socket] = None
     receiver_task: Optional[asyncio.Task] = None
+    monitor_task: Optional[asyncio.Task] = None
 
     # Data buffer, lazy-allocated on first use (roughly 4 GB virtual,
     # but pages in only when written on Linux/Windows — a single tab
@@ -618,9 +701,38 @@ def _open_tab_sockets(tab: Tab):
     # Close any prior sockets first (e.g. on retry).
     _close_tab_sockets(tab)
 
+    connect_label = tab.endpoint
+    connect_data_ep = None
+    if tab.mode == "connect":
+        try:
+            connect_data_ep, connect_label = _normalize_connect_target(tab.endpoint)
+        except Exception as exc:  # noqa: BLE001
+            tab.status = "error"
+            tab.error = f"invalid endpoint: {exc}"
+            print(f"[{tab.id}] ZMQ open failed: {tab.error}")
+            return
+
+        tab.endpoint = connect_label
+        tab.status = "connecting"
+        tab.error = None
+        host_reachable, rtplot_ports_open, peer_err = _probe_connect_target(connect_label)
+        if not host_reachable:
+            tab.status = "error"
+            tab.error = peer_err
+            print(f"[{tab.id}] peer probe failed: {peer_err}")
+            return
+        if not rtplot_ports_open:
+            tab.status = "idle"
+            tab.error = None
+            print(
+                f"[{tab.id}] host reachable, rtplot ports closed;"
+                f" waiting for ZMQ peer: {connect_label}"
+            )
+
     last_exc: Exception | None = None
     attempts = 4 if tab.mode == "bind" else 1
     for attempt in range(attempts):
+        monitor = None
         try:
             data = zmq_ctx.socket(zmq.SUB)
             data.setsockopt_string(zmq.SUBSCRIBE, "")
@@ -635,14 +747,20 @@ def _open_tab_sockets(tab: Tab):
                 tab.endpoint = f"*:{ZMQ_DEFAULT_PORT}"
                 print(f"[{tab.id}] ZMQ: bound on tcp://*:{ZMQ_DEFAULT_PORT}")
             else:
-                data_ep, label = _normalize_connect_target(tab.endpoint)
-                data.connect(data_ep)
+                monitor = data.get_monitor_socket(
+                    zmq.EVENT_CONNECTED
+                    | zmq.EVENT_DISCONNECTED
+                    | zmq.EVENT_CONNECT_DELAYED
+                    | zmq.EVENT_CONNECT_RETRIED
+                )
+                data.connect(connect_data_ep)
                 ctrl_ep, _ = _normalize_connect_target(
                     _control_target_from_data(tab.endpoint), port=ZMQ_CONTROL_PORT
                 )
                 ctrl.connect(ctrl_ep)
-                tab.endpoint = label
-                print(f"[{tab.id}] ZMQ: connected to {data_ep} (ctrl {ctrl_ep})")
+                tab.endpoint = connect_label
+                tab.monitor_task = asyncio.create_task(zmq_monitor(tab, monitor))
+                print(f"[{tab.id}] ZMQ: connecting to {connect_data_ep} (ctrl {ctrl_ep})")
 
             tab.data_sock = data
             tab.ctrl_sock = ctrl
@@ -657,6 +775,11 @@ def _open_tab_sockets(tab: Tab):
             except Exception: pass
             try: ctrl.close(0)
             except Exception: pass
+            try:
+                if monitor is not None:
+                    monitor.close(0)
+            except Exception:
+                pass
             if attempt < attempts - 1:
                 wait = 0.15 * (attempt + 1)
                 print(
@@ -690,6 +813,62 @@ async def _cancel_task(task):
         await task
     except (asyncio.CancelledError, Exception):  # noqa: BLE001
         pass
+
+
+async def zmq_monitor(tab: Tab, monitor_sock):
+    """Track transport-level ZMQ state for connect-mode tabs."""
+    try:
+        while True:
+            evt = await recv_monitor_message(monitor_sock)
+            event = evt.get("event")
+            if event == zmq.EVENT_CONNECTED:
+                if tab.status in ("connecting", "idle") and not tab.initialized:
+                    tab.status = "connected"
+                    tab.error = None
+                    await broadcast_tab(tab.id)
+            elif event == zmq.EVENT_DISCONNECTED:
+                if tab.mode == "connect":
+                    host_reachable, rtplot_ports_open, peer_err = _probe_connect_target(tab.endpoint)
+                    if host_reachable and not rtplot_ports_open:
+                        tab.status = "idle"
+                        tab.error = None
+                    elif host_reachable:
+                        tab.status = "idle"
+                        tab.error = None
+                    else:
+                        tab.status = "error"
+                        tab.error = peer_err
+                    await broadcast_tab(tab.id)
+            elif event == zmq.EVENT_CONNECT_RETRIED:
+                if tab.mode == "connect" and tab.status == "error":
+                    host_reachable, _rtplot_ports_open, peer_err = _probe_connect_target(tab.endpoint)
+                    if host_reachable:
+                        tab.status = "idle"
+                        tab.error = None
+                    else:
+                        tab.error = peer_err
+                    await broadcast_tab(tab.id)
+            elif event == zmq.EVENT_CONNECT_DELAYED:
+                if tab.mode == "connect" and tab.status == "error":
+                    host_reachable, _rtplot_ports_open, peer_err = _probe_connect_target(tab.endpoint)
+                    if host_reachable:
+                        tab.status = "idle"
+                        tab.error = None
+                    else:
+                        tab.error = peer_err
+                    await broadcast_tab(tab.id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if tab.mode == "connect" and tab.status != "streaming":
+            tab.status = "error"
+            tab.error = f"ZMQ monitor error: {exc}"
+            await broadcast_tab(tab.id)
+    finally:
+        try:
+            monitor_sock.close(0)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def send_control_event(tab: Tab, event):
@@ -1003,6 +1182,7 @@ async def delete_tab(tab_id: str):
     if t is None:
         return
     await _cancel_task(t.receiver_task)
+    await _cancel_task(t.monitor_task)
     _close_tab_sockets(t)
     # Move any viewers off this tab back to bind_me on the browser side;
     # server tells them via tab_removed + they re-subscribe.
@@ -1091,6 +1271,8 @@ async def reconnect_tab(tab_id: str):
     if t is None:
         return
     await _cancel_task(t.receiver_task)
+    await _cancel_task(t.monitor_task)
+    t.monitor_task = None
     # _open_tab_sockets closes first, then reopens. Status gets set to
     # "idle" on success or "error" + a message on bind/connect failure.
     _open_tab_sockets(t)
@@ -1467,6 +1649,7 @@ async def on_cleanup(app):
         await _cancel_task(app.get(key))
     for t in list(tabs.values()):
         await _cancel_task(t.receiver_task)
+        await _cancel_task(t.monitor_task)
         _close_tab_sockets(t)
     for ws in list(ws_clients):
         try:

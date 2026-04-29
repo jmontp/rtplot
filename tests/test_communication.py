@@ -829,6 +829,284 @@ class TestConnectModeTab(_ServerTest):
 
     OUT_DATA_PORT = 5599
     OUT_CTRL_PORT = 5600
+    EMPTY_DATA_PORT = 5611
+    HEALTH_DATA_PORT = 5613
+    HEALTH_CTRL_PORT = 5614
+    RESTART_DATA_PORT = 5615
+    RESTART_CTRL_PORT = 5616
+    UI_MISSING_PORT = 5617
+    UI_HEALTH_DATA_PORT = 5619
+    UI_HEALTH_CTRL_PORT = 5620
+    AUTO_DATA_PORT = 5621
+    AUTO_CTRL_PORT = 5622
+
+    def test_connect_tab_closed_rtplot_ports_is_gray(self):
+        async def go():
+            async with aiohttp.ClientSession() as s:
+                async with s.ws_connect(f"http://localhost:{HTTP_PORT}/ws") as ws:
+                    await _drain_until(ws, lambda d: isinstance(d, dict) and d.get("type") == "tabs")
+                    await ws.send_str(json.dumps({
+                        "type": "tab_create",
+                        "name": "ReachableNoRtplot",
+                        "endpoint": f"127.0.0.1:{self.EMPTY_DATA_PORT}",
+                    }))
+                    listing = await _drain_until(
+                        ws,
+                        lambda d: isinstance(d, dict) and d.get("type") == "tabs"
+                                  and any(
+                                      t["id"] != "bind_me"
+                                      and t["name"] == "ReachableNoRtplot"
+                                      and t["status"] == "idle"
+                                      for t in d["tabs"]
+                                  ),
+                        timeout=4,
+                    )
+                    self.assertIsNotNone(listing, "closed rtplot ports were not marked idle")
+                    missing = next(t for t in listing["tabs"] if t.get("name") == "ReachableNoRtplot")
+                    self.assertIsNone(missing.get("error"))
+        self.run_async(go(), timeout=10)
+
+    def test_connect_tab_unreachable_host_is_red(self):
+        async def go():
+            async with aiohttp.ClientSession() as s:
+                async with s.ws_connect(f"http://localhost:{HTTP_PORT}/ws") as ws:
+                    await _drain_until(ws, lambda d: isinstance(d, dict) and d.get("type") == "tabs")
+                    await ws.send_str(json.dumps({
+                        "type": "tab_create",
+                        "name": "NoSuchHost",
+                        "endpoint": "no-such-host.invalid:5555",
+                    }))
+                    listing = await _drain_until(
+                        ws,
+                        lambda d: isinstance(d, dict) and d.get("type") == "tabs"
+                                  and any(
+                                      t["id"] != "bind_me"
+                                      and t["name"] == "NoSuchHost"
+                                      and t["status"] == "error"
+                                      for t in d["tabs"]
+                                  ),
+                        timeout=4,
+                    )
+                    self.assertIsNotNone(listing, "unreachable host was not marked error")
+                    missing = next(t for t in listing["tabs"] if t.get("name") == "NoSuchHost")
+                    self.assertIn("unreachable", missing.get("error") or "")
+        self.run_async(go(), timeout=10)
+
+    def test_reconnect_reaches_zmq_connected_before_data(self):
+        ctx = zmq.Context.instance()
+        pub = ctx.socket(zmq.PUB)
+        pub.bind(f"tcp://127.0.0.1:{self.HEALTH_DATA_PORT}")
+        pull = ctx.socket(zmq.PULL)
+        pull.bind(f"tcp://127.0.0.1:{self.HEALTH_CTRL_PORT}")
+        try:
+            async def go():
+                async with aiohttp.ClientSession() as s:
+                    async with s.ws_connect(f"http://localhost:{HTTP_PORT}/ws") as ws:
+                        await _drain_until(ws, lambda d: isinstance(d, dict) and d.get("type") == "tabs")
+                        await ws.send_str(json.dumps({
+                            "type": "tab_create",
+                            "name": "BootedPi",
+                            "endpoint": f"127.0.0.1:{self.HEALTH_DATA_PORT}",
+                        }))
+                        listing = await _drain_until(
+                            ws,
+                            lambda d: isinstance(d, dict) and d.get("type") == "tabs"
+                                      and any(t["id"] != "bind_me" and t["name"] == "BootedPi"
+                                              for t in d["tabs"]),
+                            timeout=4,
+                        )
+                        tab_id = next(t["id"] for t in listing["tabs"] if t.get("name") == "BootedPi")
+                        upd = await _drain_until(
+                            ws,
+                            lambda d: isinstance(d, dict)
+                                      and d.get("type") == "tab"
+                                      and d["tab"]["id"] == tab_id
+                                      and d["tab"]["status"] == "connected",
+                            timeout=4,
+                        )
+                        self.assertIsNotNone(upd, "reachable peer did not become ZMQ-connected")
+                        self.assertIsNone(upd["tab"]["error"])
+            self.run_async(go(), timeout=12)
+        finally:
+            pub.close(0); pull.close(0)
+
+    def test_gray_tab_auto_promotes_when_peer_starts(self):
+        ctx = zmq.Context.instance()
+        pub = None
+        pull = None
+        try:
+            async def go():
+                nonlocal pub, pull
+                async with aiohttp.ClientSession() as s:
+                    async with s.ws_connect(f"http://localhost:{HTTP_PORT}/ws") as ws:
+                        await _drain_until(ws, lambda d: isinstance(d, dict) and d.get("type") == "tabs")
+                        await ws.send_str(json.dumps({
+                            "type": "tab_create",
+                            "name": "StartsLater",
+                            "endpoint": f"127.0.0.1:{self.AUTO_DATA_PORT}",
+                        }))
+                        listing = await _drain_until(
+                            ws,
+                            lambda d: isinstance(d, dict) and d.get("type") == "tabs"
+                                      and any(t["id"] != "bind_me" and t["name"] == "StartsLater"
+                                              and t["status"] == "idle"
+                                              for t in d["tabs"]),
+                            timeout=4,
+                        )
+                        self.assertIsNotNone(listing, "closed ports did not create an idle tab")
+                        tab_id = next(t["id"] for t in listing["tabs"] if t.get("name") == "StartsLater")
+
+                        pub = ctx.socket(zmq.PUB)
+                        pub.bind(f"tcp://127.0.0.1:{self.AUTO_DATA_PORT}")
+                        pull = ctx.socket(zmq.PULL)
+                        pull.bind(f"tcp://127.0.0.1:{self.AUTO_CTRL_PORT}")
+
+                        promoted = await _drain_until(
+                            ws,
+                            lambda d: isinstance(d, dict)
+                                      and d.get("type") == "tab"
+                                      and d["tab"]["id"] == tab_id
+                                      and d["tab"]["status"] == "connected",
+                            timeout=8,
+                        )
+                        self.assertIsNotNone(
+                            promoted,
+                            "idle tab did not auto-promote to connected when peer started",
+                        )
+            self.run_async(go(), timeout=15)
+        finally:
+            if pub is not None:
+                pub.close(0)
+            if pull is not None:
+                pull.close(0)
+
+    def test_peer_disconnect_goes_gray_then_reconnect_goes_connected(self):
+        ctx = zmq.Context.instance()
+
+        def bind_peer():
+            pub = ctx.socket(zmq.PUB)
+            pub.bind(f"tcp://127.0.0.1:{self.RESTART_DATA_PORT}")
+            pull = ctx.socket(zmq.PULL)
+            pull.bind(f"tcp://127.0.0.1:{self.RESTART_CTRL_PORT}")
+            return pub, pull
+
+        pub, pull = bind_peer()
+        try:
+            async def go():
+                async with aiohttp.ClientSession() as s:
+                    async with s.ws_connect(f"http://localhost:{HTTP_PORT}/ws") as ws:
+                        await _drain_until(ws, lambda d: isinstance(d, dict) and d.get("type") == "tabs")
+                        await ws.send_str(json.dumps({
+                            "type": "tab_create",
+                            "name": "RestartingPi",
+                            "endpoint": f"127.0.0.1:{self.RESTART_DATA_PORT}",
+                        }))
+                        listing = await _drain_until(
+                            ws,
+                            lambda d: isinstance(d, dict) and d.get("type") == "tabs"
+                                      and any(t["id"] != "bind_me" and t["name"] == "RestartingPi"
+                                              for t in d["tabs"]),
+                            timeout=4,
+                        )
+                        tab_id = next(t["id"] for t in listing["tabs"] if t.get("name") == "RestartingPi")
+                        connected = await _drain_until(
+                            ws,
+                            lambda d: isinstance(d, dict)
+                                      and d.get("type") == "tab"
+                                      and d["tab"]["id"] == tab_id
+                                      and d["tab"]["status"] == "connected",
+                            timeout=4,
+                        )
+                        self.assertIsNotNone(connected, "peer did not reach connected before shutdown")
+
+                        nonlocal pub, pull
+                        pub.close(0); pull.close(0)
+                        pub = pull = None
+                        went_gray = await _drain_until(
+                            ws,
+                            lambda d: isinstance(d, dict)
+                                      and d.get("type") == "tab"
+                                      and d["tab"]["id"] == tab_id
+                                      and d["tab"]["status"] == "idle",
+                            timeout=5,
+                        )
+                        self.assertIsNotNone(went_gray, "peer disconnect did not return tab to idle")
+
+                        pub, pull = bind_peer()
+                        await ws.send_str(json.dumps({"type": "tab_reconnect", "id": tab_id}))
+                        recovered = await _drain_until(
+                            ws,
+                            lambda d: isinstance(d, dict)
+                                      and d.get("type") == "tab"
+                                      and d["tab"]["id"] == tab_id
+                                      and d["tab"]["status"] == "connected",
+                            timeout=5,
+                        )
+                        self.assertIsNotNone(recovered, "Reconnect did not restore connected status")
+                        self.assertIsNone(recovered["tab"]["error"])
+            self.run_async(go(), timeout=20)
+        finally:
+            if pub is not None:
+                pub.close(0)
+            if pull is not None:
+                pull.close(0)
+
+    def test_browser_status_dots_reflect_connect_tab_health(self):
+        try:
+            from playwright.sync_api import Error as PlaywrightError
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            self.skipTest(f"playwright unavailable: {exc}")
+
+        ctx = zmq.Context.instance()
+        pub = ctx.socket(zmq.PUB)
+        pub.bind(f"tcp://127.0.0.1:{self.UI_HEALTH_DATA_PORT}")
+        pull = ctx.socket(zmq.PULL)
+        pull.bind(f"tcp://127.0.0.1:{self.UI_HEALTH_CTRL_PORT}")
+        try:
+            with sync_playwright() as p:
+                try:
+                    browser = p.chromium.launch(headless=True)
+                except PlaywrightError as exc:
+                    self.skipTest(f"playwright browser unavailable: {exc}")
+                try:
+                    page = browser.new_page()
+                    page.goto(f"http://localhost:{HTTP_PORT}/", wait_until="domcontentloaded")
+                    page.locator(".tab-add").click(force=True)
+                    page.locator("#tab-create .name-in").fill("ClosedPortsUi")
+                    page.locator("#tab-create .ep-in").fill(f"127.0.0.1:{self.UI_MISSING_PORT}")
+                    page.locator("#tab-create .tab-create-ok").click(force=True)
+                    missing_dot = page.locator(".tab", has_text="ClosedPortsUi").locator(".tab-dot")
+                    missing_dot.wait_for(state="visible", timeout=4000)
+                    page.wait_for_function(
+                        "(el) => el.classList.contains('idle')",
+                        arg=missing_dot.element_handle(),
+                        timeout=4000,
+                    )
+                    self.assertEqual(
+                        missing_dot.get_attribute("title"),
+                        "Host reachable; rtplot ports are not connected",
+                    )
+
+                    page.locator(".tab-add").click(force=True)
+                    page.locator("#tab-create .name-in").fill("BootedUi")
+                    page.locator("#tab-create .ep-in").fill(f"127.0.0.1:{self.UI_HEALTH_DATA_PORT}")
+                    page.locator("#tab-create .tab-create-ok").click(force=True)
+                    booted_dot = page.locator(".tab", has_text="BootedUi").locator(".tab-dot")
+                    booted_dot.wait_for(state="visible", timeout=4000)
+                    page.wait_for_function(
+                        "(el) => el.classList.contains('connected')",
+                        arg=booted_dot.element_handle(),
+                        timeout=5000,
+                    )
+                    self.assertEqual(
+                        booted_dot.get_attribute("title"),
+                        "ZMQ connected; waiting for plot config/data",
+                    )
+                finally:
+                    browser.close()
+        finally:
+            pub.close(0); pull.close(0)
 
     def test_connect_mode_data_inbound(self):
         # Stand up a fake "remote sender" that binds the data port and

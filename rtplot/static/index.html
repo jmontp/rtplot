@@ -15,6 +15,7 @@
   .tab.active { background: #fff; color: #111; border-color: #bbb; font-weight: 600; }
   .tab .tab-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #bbb; flex: 0 0 auto; }
   .tab .tab-dot.idle { background: #bbb; }
+  .tab .tab-dot.connected { background: #e8b13a; box-shadow: 0 0 3px rgba(232,177,58,0.5); }
   .tab .tab-dot.streaming { background: #2ebf4e; box-shadow: 0 0 3px rgba(46,191,78,0.5); }
   .tab .tab-dot.error { background: #e05252; }
   .tab .tab-dot.connecting { background: #e8b13a; animation: pulse 1s ease-in-out infinite alternate; }
@@ -987,6 +988,19 @@
       }
 
       // ---- Tab bar rendering ----
+      function tabStatusTitle(t) {
+        if (t.error) return t.error;
+        if (t.status === 'streaming') return 'Receiving rtplot data';
+        if (t.status === 'connected') return 'ZMQ connected; waiting for plot config/data';
+        if (t.status === 'connecting') return 'Checking device connection';
+        if (t.status === 'idle') {
+          return t.mode === 'bind'
+            ? 'Listening for a sender'
+            : 'Host reachable; rtplot ports are not connected';
+        }
+        return 'Status unknown';
+      }
+
       function renderTabs() {
         tabbar.innerHTML = '';
         // Stable order: bind_me first, then others in insertion order.
@@ -1002,7 +1016,7 @@
 
           const dot = document.createElement('span');
           dot.className = 'tab-dot ' + (t.status || 'idle');
-          if (t.error) dot.title = t.error;
+          dot.title = tabStatusTitle(t);
           el.appendChild(dot);
 
           // Stacked labels: name on top, endpoint on a muted subline so
