@@ -22,7 +22,7 @@ socket = context.socket(zmq.PUB)
 control_socket = context.socket(zmq.PULL)
 control_socket.setsockopt(zmq.RCVHWM, 1000)
 #Non-blocking local state for controls, drained on each poll_controls() call
-_control_slider_values = {}
+_control_values = {}
 _control_button_events = []
 
 # Cached payload of the most recent initialize_plots() call. The server
@@ -248,9 +248,26 @@ class Text:
 
 
 @dataclass
+class TextInput:
+    id: str
+    label: str
+    value: str = ""
+    placeholder: Optional[str] = None
+    max_length: Optional[int] = None
+    height: Optional[float] = None
+
+    def to_dict(self):
+        return _drop_none({
+            "type": "text_input", "id": self.id, "label": self.label,
+            "value": self.value, "placeholder": self.placeholder,
+            "max_length": self.max_length, "height": self.height,
+        })
+
+
+@dataclass
 class ControlsRow:
     """A row of control widgets, rendered in place of a plot."""
-    controls: List[Union[Button, Slider, Dial, Display, Text, dict]] = field(default_factory=list)
+    controls: List[Union[Button, Slider, Dial, Display, Text, TextInput, dict]] = field(default_factory=list)
 
     def to_dict(self):
         return {"controls": [
@@ -536,7 +553,9 @@ def _send_initialize_with_handshake(cfg, timeout):
             elif evtype == "button":
                 _control_button_events.append(event.get("id"))
             elif evtype == "slider":
-                _control_slider_values[event.get("id")] = float(event.get("value", 0.0))
+                _control_values[event.get("id")] = float(event.get("value", 0.0))
+            elif evtype == "text":
+                _control_values[event.get("id")] = str(event.get("value", ""))
             # Unknown / resend_config: ignore during handshake.
         # Resend if the window elapsed without an ack; PUB/SUB will
         # drop the first send during slow-join but retries land.
@@ -575,8 +594,8 @@ def poll_controls():
     """Drain the return channel non-blocking and return current control state.
 
     Returns a ControlState(values, buttons) where:
-      - values: dict of {slider_id: float} with the latest value of every
-        slider the server has told us about since process start.
+      - values: dict of latest control values keyed by id. Sliders/dials
+        remain floats; text_input controls remain strings.
       - buttons: list of button ids that fired since the previous poll
         (cleared after this call).
 
@@ -587,7 +606,7 @@ def poll_controls():
     Reconnect button on a tab), it asks us to re-publish the cached
     initialize_plots() payload so the plot rewires without the user
     restarting their script. The request is consumed silently — the
-    returned ControlState only ever contains slider/button events.
+    returned ControlState only ever contains control/button events.
     """
     global _control_button_events
     while True:
@@ -601,7 +620,9 @@ def poll_controls():
         if evtype == "button":
             _control_button_events.append(event.get("id"))
         elif evtype == "slider":
-            _control_slider_values[event.get("id")] = float(event.get("value", 0.0))
+            _control_values[event.get("id")] = float(event.get("value", 0.0))
+        elif evtype == "text":
+            _control_values[event.get("id")] = str(event.get("value", ""))
         elif evtype == "resend_config":
             if plot_desc_dict is not None:
                 socket.send_string(SENDING_PLOT_UPDATE)
@@ -615,7 +636,7 @@ def poll_controls():
 
     buttons = _control_button_events
     _control_button_events = []
-    return ControlState(values=dict(_control_slider_values), buttons=buttons)
+    return ControlState(values=dict(_control_values), buttons=buttons)
 
 
 def save_snapshot(path, server_url=None, animate=False, timeout=5.0):

@@ -375,6 +375,7 @@ class Tab:
     layout: list = field(default_factory=list)
     control_rows: list = field(default_factory=list)
     slider_values: dict = field(default_factory=dict)
+    text_values: dict = field(default_factory=dict)
     display_values: dict = field(default_factory=dict)
     display_dirty: set = field(default_factory=set)
     fps: float = 0.0
@@ -499,6 +500,7 @@ def parse_config(tab: Tab, json_config):
     trace_info = []
     control_rows = []
     slider_values = {}
+    text_values = {}
     layout = []
     num_datapoints_in_plot = DEFAULT_NUM_DATAPOINTS_IN_PLOT
 
@@ -514,6 +516,8 @@ def parse_config(tab: Tab, json_config):
             for element in row:
                 if element.get("type") in ("slider", "dial") and "value" in element:
                     slider_values[element["id"]] = float(element["value"])
+                elif element.get("type") == "text_input":
+                    text_values[element["id"]] = str(element.get("value", ""))
             layout.append({"kind": "controls", "index": len(control_rows)})
             control_rows.append(row)
             continue
@@ -546,6 +550,17 @@ def parse_config(tab: Tab, json_config):
     }
     tab.display_dirty = {d for d in tab.display_dirty if d in active_display_ids}
     tab.slider_values = slider_values
+    active_text_ids = {
+        el["id"]
+        for row in control_rows
+        for el in row
+        if el.get("type") == "text_input"
+    }
+    tab.text_values = {
+        text_id: tab.text_values.get(text_id, default_value)
+        for text_id, default_value in text_values.items()
+        if text_id in active_text_ids
+    }
     tab.layout = layout
 
     num_traces = sum(traces_per_plot)
@@ -585,9 +600,18 @@ def build_config_message(tab: Tab, config_dict) -> dict:
         "controls": tab.control_rows,
         "layout": tab.layout,
         "slider_values": dict(tab.slider_values),
+        "text_values": dict(tab.text_values),
         "display_values": dict(tab.display_values),
         "row_layout": bool(NEW_SUBPLOT_IN_ROW),
     }
+
+
+def refresh_config_message(tab: Tab):
+    """Rebuild the browser config payload using the tab's latest control state."""
+    if tab.config_dict is None:
+        tab.config_message = None
+    else:
+        tab.config_message = build_config_message(tab, tab.config_dict)
 
 
 ###############################
@@ -952,7 +976,7 @@ async def zmq_receiver(tab: Tab):
 
             tab.last_config_error = None  # clear: this one was good
             tab.config_dict = cfg
-            tab.config_message = build_config_message(tab, cfg)
+            refresh_config_message(tab)
             tab.initialized = True
             fps = None
             tab.fps = 0.0
@@ -975,6 +999,10 @@ async def zmq_receiver(tab: Tab):
             for sid, svalue in tab.slider_values.items():
                 await send_control_event(
                     tab, {"type": "slider", "id": sid, "value": svalue}
+                )
+            for text_id, text_value in tab.text_values.items():
+                await send_control_event(
+                    tab, {"type": "text", "id": text_id, "value": text_value}
                 )
 
         elif category == RECEIVED_DATA:
@@ -1342,6 +1370,7 @@ async def handle_ws(request):
                         },
                     )
                     if t.config_message is not None:
+                        refresh_config_message(t)
                         await ws_send_text(ws, t.config_message)
                         if t.display_values:
                             await ws_send_text(
@@ -1402,8 +1431,20 @@ async def handle_ws(request):
                     t = tabs.get(tid)
                     if sid and t is not None:
                         t.slider_values[sid] = value
+                        refresh_config_message(t)
                         await send_control_event(
                             t, {"type": "slider", "id": sid, "value": value}
+                        )
+                elif ptype == "control_text":
+                    text_id = payload.get("id")
+                    tid = ws_tab.get(ws, BIND_ME_ID)
+                    t = tabs.get(tid)
+                    if text_id and t is not None:
+                        value = str(payload.get("value", ""))
+                        t.text_values[text_id] = value
+                        refresh_config_message(t)
+                        await send_control_event(
+                            t, {"type": "text", "id": text_id, "value": value}
                         )
             elif msg.type == WSMsgType.ERROR:
                 break

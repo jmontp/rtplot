@@ -95,6 +95,8 @@
   .ctrl-numinput { width: 72px; font-family: monospace; font-size: calc(13px * var(--ui-scale)); padding: 4px 6px; border: 1px solid #b8b8b8; border-radius: 3px; background: #fff; color: #222; text-align: right; -moz-appearance: textfield; }
   .ctrl-numinput::-webkit-outer-spin-button,
   .ctrl-numinput::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .ctrl-textinput { min-width: 200px; width: min(320px, 100%); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: calc(13px * var(--ui-scale)); padding: 7px 10px; border: 1px solid #b8b8b8; border-radius: 3px; background: #fff; color: #222; text-align: left; }
+  .ctrl-textinput:focus { outline: none; border-color: #2a5db0; box-shadow: 0 0 0 2px rgba(42, 93, 176, 0.14); }
   .ctrl-nudgebtn { width: 26px; height: 26px; font-size: calc(15px * var(--ui-scale)); font-weight: 600; line-height: 1; padding: 0; border: 1px solid #b8b8b8; background: #f7f7f7; color: #333; cursor: pointer; border-radius: 3px; }
   .ctrl-nudgebtn:hover { background: #e9e9e9; }
   .ctrl-nudgebtn:active { background: #dcdcdc; }
@@ -415,7 +417,7 @@
       let socket = null;
       let pendingFrame = false;
       let lastStatus = { fps: 0, statusByte: 0, nonPlot: 0, peers: 0, dirty: true };
-      const controlElements = { displays: {}, displayFormats: {}, displayKinds: {}, sliders: {} };
+      const controlElements = { displays: {}, displayFormats: {}, displayKinds: {}, sliders: {}, textInputs: {} };
 
       function sendCtrl(msg) {
         if (socket && socket.readyState === WebSocket.OPEN) {
@@ -684,6 +686,34 @@
           item.appendChild(val);
           controlElements.displays[el.id] = val;
           controlElements.displayKinds[el.id] = 'text';
+        } else if (el.type === 'text_input') {
+          item.classList.add('ctrl-text-input', 'flex');
+          if (el.label) {
+            const lbl = document.createElement('label');
+            lbl.textContent = el.label;
+            item.appendChild(lbl);
+          }
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.className = 'ctrl-textinput';
+          input.value = (el.value !== undefined && el.value !== null) ? String(el.value) : '';
+          if (el.placeholder !== undefined && el.placeholder !== null) {
+            input.placeholder = String(el.placeholder);
+          }
+          if (el.max_length !== undefined && Number.isFinite(Number(el.max_length))) {
+            input.maxLength = Number(el.max_length);
+          }
+          const commit = () => sendCtrl({ type: 'control_text', id: el.id, value: input.value });
+          input.addEventListener('change', commit);
+          input.addEventListener('blur', commit);
+          input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commit();
+            }
+          });
+          item.appendChild(input);
+          controlElements.textInputs[el.id] = input;
         }
         return item;
       }
@@ -722,6 +752,14 @@
         }
       }
 
+      function applyTextValues(values) {
+        if (!values) return;
+        for (const [id, val] of Object.entries(values)) {
+          const input = controlElements.textInputs[id];
+          if (input) input.value = (val !== undefined && val !== null) ? String(val) : '';
+        }
+      }
+
       function applyDisplayValues(values) {
         if (!values) return;
         for (const [id, val] of Object.entries(values)) {
@@ -752,6 +790,7 @@
         controlElements.displayFormats = {};
         controlElements.displayKinds = {};
         controlElements.sliders = {};
+        controlElements.textInputs = {};
       }
 
       function showEmptyState(text) {
@@ -859,6 +898,7 @@
         });
         totalTraces = traceOffset;
         applySliderValues(cfg.slider_values);
+        applyTextValues(cfg.text_values);
         applyDisplayValues(cfg.display_values);
         // Render LaTeX in everything we just built: uPlot's title,
         // x/y axis labels, and legend (all rendered as HTML), plus the

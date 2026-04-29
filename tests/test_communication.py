@@ -594,6 +594,142 @@ class TestControlSliderRouting(_ServerTest):
         self.run_async(go())
 
 
+class TestControlTextRouting(_ServerTest):
+    def test_text_value_round_trips(self):
+        async def go():
+            zc = ZmqTestClient()
+            try:
+                cfg = OrderedDict([
+                    ("p0", {"names": ["x"]}),
+                    ("ctrl0", {"controls": [
+                        {
+                            "type": "text_input",
+                            "id": "log_name",
+                            "label": "Log Name",
+                            "value": "",
+                            "placeholder": "walk_fast_01",
+                            "max_length": 80,
+                        },
+                    ]}),
+                ])
+                zc.send_config(cfg)
+                seed = None
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    ev = zc.poll_one(timeout=0.3)
+                    if ev is None:
+                        continue
+                    if ev.get("type") == "text" and ev.get("id") == "log_name":
+                        seed = ev
+                        break
+                self.assertIsNotNone(seed, "server didn't echo seeded text input")
+                self.assertEqual(seed.get("value"), "")
+
+                async with aiohttp.ClientSession() as s:
+                    async with s.ws_connect(f"http://localhost:{HTTP_PORT}/ws") as ws:
+                        await ws.send_str(json.dumps({"type": "tab_subscribe", "id": "bind_me"}))
+                        cfg_msg = await _drain_until(
+                            ws, lambda d: isinstance(d, dict) and d.get("type") == "config"
+                        )
+                        self.assertIsNotNone(cfg_msg)
+                        self.assertEqual(
+                            cfg_msg.get("text_values", {}).get("log_name"),
+                            "",
+                        )
+                        await ws.send_str(json.dumps({
+                            "type": "control_text",
+                            "id": "log_name",
+                            "value": "walk_fast_01",
+                        }))
+                typed = None
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    ev = zc.poll_one(timeout=0.3)
+                    if ev is None:
+                        continue
+                    if ev.get("type") == "text" and ev.get("id") == "log_name":
+                        if ev.get("value") == "walk_fast_01":
+                            typed = ev
+                            break
+                self.assertIsNotNone(typed, "client never saw the text input update")
+            finally:
+                zc.close()
+        self.run_async(go())
+
+
+class TestControlTextUI(_ServerTest):
+    def test_browser_text_input_renders_and_sends_updates(self):
+        try:
+            from playwright.sync_api import Error as PlaywrightError
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            self.skipTest(f"playwright unavailable: {exc}")
+
+        zc = ZmqTestClient()
+        try:
+            cfg = OrderedDict([
+                ("p0", {"names": ["x"], "title": "TEXT_UI"}),
+                ("ctrl0", {"controls": [
+                    {
+                        "type": "text_input",
+                        "id": "log_name",
+                        "label": "Log Name",
+                        "value": "",
+                        "placeholder": "walk_fast_01",
+                        "max_length": 80,
+                    },
+                ]}),
+            ])
+            zc.send_config(cfg)
+
+            with sync_playwright() as p:
+                try:
+                    browser = p.chromium.launch(headless=True)
+                except PlaywrightError as exc:
+                    self.skipTest(f"playwright browser unavailable: {exc}")
+                try:
+                    page = browser.new_page()
+                    page.goto(f"http://localhost:{HTTP_PORT}/", wait_until="domcontentloaded")
+                    text_input = page.locator("input.ctrl-textinput")
+                    text_input.wait_for(state="visible", timeout=4000)
+                    self.assertEqual(text_input.get_attribute("placeholder"), "walk_fast_01")
+                    self.assertEqual(text_input.get_attribute("maxlength"), "80")
+
+                    text_input.fill("walk_fast_01")
+                    text_input.press("Enter")
+
+                    enter_event = None
+                    deadline = time.time() + 3.0
+                    while time.time() < deadline:
+                        ev = zc.poll_one(timeout=0.3)
+                        if ev is None:
+                            continue
+                        if ev.get("type") == "text" and ev.get("id") == "log_name":
+                            if ev.get("value") == "walk_fast_01":
+                                enter_event = ev
+                                break
+                    self.assertIsNotNone(enter_event, "Enter did not send the text input value")
+
+                    text_input.fill("walk_fast_02")
+                    page.locator("#status").click()
+
+                    blur_event = None
+                    deadline = time.time() + 3.0
+                    while time.time() < deadline:
+                        ev = zc.poll_one(timeout=0.3)
+                        if ev is None:
+                            continue
+                        if ev.get("type") == "text" and ev.get("id") == "log_name":
+                            if ev.get("value") == "walk_fast_02":
+                                blur_event = ev
+                                break
+                    self.assertIsNotNone(blur_event, "Blur did not send the updated text input value")
+                finally:
+                    browser.close()
+        finally:
+            zc.close()
+
+
 class TestDisplayUpdate(_ServerTest):
     def test_display_value_reaches_browser(self):
         async def go():
@@ -712,10 +848,33 @@ while True:
     time.sleep(0.05)
 """
 
+_REAL_CLIENT_MIXED_CONTROLS_SCRIPT = """\
+import sys, time, json, os
+sys.path.insert(0, {repo!r})
+from rtplot import client
+client.local_plot()
+client.initialize_plots([
+    {{"names": ["sig"], "title": "REAL_MIXED", "xrange": 200}},
+    {{"controls": [
+        {{"type": "slider", "id": "torque_cutoff_hz", "label": "Cutoff", "min": 0, "max": 50, "value": 15.0}},
+        {{"type": "text_input", "id": "log_name", "label": "Log Name", "value": "", "placeholder": "walk_fast_01", "max_length": 80}},
+    ]}},
+])
+print("EVT:READY", flush=True)
+i = 0
+while True:
+    client.send_array(float(i % 100))
+    state = client.poll_controls()
+    if "torque_cutoff_hz" in state.values and "log_name" in state.values:
+        print("EVT:MIXED:" + json.dumps(state.values, sort_keys=True), flush=True)
+    i += 1
+    time.sleep(0.05)
+"""
 
-def _start_real_client():
+
+def _start_real_client(script=_REAL_CLIENT_SCRIPT):
     """Spawn the real rtplot.client in a subprocess and wait for READY."""
-    code = _REAL_CLIENT_SCRIPT.format(repo=REPO_ROOT)
+    code = script.format(repo=REPO_ROOT)
     p = subprocess.Popen(
         [sys.executable, "-u", "-c", code],
         stdout=subprocess.PIPE,
@@ -820,6 +979,46 @@ class TestRealClientPollControls(_ServerTest):
                             "real client did not re-publish config after Reconnect",
                         )
             self.run_async(go(), timeout=20)
+        finally:
+            proc.terminate(); proc.wait(timeout=2)
+
+    def test_mixed_slider_and_text_values_through_real_client(self):
+        proc = _start_real_client(_REAL_CLIENT_MIXED_CONTROLS_SCRIPT)
+        try:
+            async def go():
+                async with aiohttp.ClientSession() as s:
+                    async with s.ws_connect(f"http://localhost:{HTTP_PORT}/ws") as ws:
+                        await ws.send_str(json.dumps({"type": "tab_subscribe", "id": "bind_me"}))
+                        cfg = await _drain_until(
+                            ws,
+                            lambda d: isinstance(d, dict) and d.get("type") == "config"
+                                      and d.get("plots", [{}])[0].get("title") == "REAL_MIXED",
+                            timeout=4,
+                        )
+                        self.assertIsNotNone(cfg)
+                        self.assertEqual(cfg.get("text_values", {}).get("log_name"), "")
+                        await ws.send_str(json.dumps({
+                            "type": "control_slider",
+                            "id": "torque_cutoff_hz",
+                            "value": 15.0,
+                        }))
+                        await ws.send_str(json.dumps({
+                            "type": "control_text",
+                            "id": "log_name",
+                            "value": "walk_fast_01",
+                        }))
+            self.run_async(go(), timeout=10)
+            line = _drain_client_lines(
+                proc,
+                lambda l: '"log_name": "walk_fast_01"' in l,
+                timeout=4.0,
+            )
+            self.assertIsNotNone(line, "real client never reported mixed control values")
+            payload = json.loads(line.split("EVT:MIXED:", 1)[1].strip())
+            self.assertEqual(payload.get("log_name"), "walk_fast_01")
+            self.assertIsInstance(payload.get("log_name"), str)
+            self.assertEqual(payload.get("torque_cutoff_hz"), 15.0)
+            self.assertIsInstance(payload.get("torque_cutoff_hz"), float)
         finally:
             proc.terminate(); proc.wait(timeout=2)
 
