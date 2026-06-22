@@ -90,6 +90,7 @@ else:
 SENDING_PLOT_UPDATE = "0"
 SENDING_DATA = "1"
 SENDING_DISPLAY = "4"
+SENDING_TEXT_INPUT = "5"
 
 #Lightweight result type returned by poll_controls()
 ControlState = namedtuple("ControlState", ["values", "buttons"])
@@ -588,6 +589,18 @@ def set_display(display_id: str, value):
         payload_value = str(value)
     socket.send_string(SENDING_DISPLAY, zmq.SNDMORE)
     socket.send_json({"id": str(display_id), "value": payload_value})
+
+
+def set_text_input(input_id: str, value):
+    """Push a text_input control value to the browser and server state.
+
+    This is the editable-control companion to set_display(). It updates
+    declared 'text_input' controls without rebuilding the full plot config,
+    and the server keeps the value as the current control state returned by
+    poll_controls().
+    """
+    socket.send_string(SENDING_TEXT_INPUT, zmq.SNDMORE)
+    socket.send_json({"id": str(input_id), "value": str(value)})
 
 
 def poll_controls():
