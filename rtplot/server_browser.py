@@ -215,6 +215,7 @@ RECEIVED_PLOT_UPDATE = 0
 RECEIVED_DATA = 1
 SAVE_PLOT = 3
 RECEIVED_DISPLAY = 4
+RECEIVED_TEXT_INPUT = 5
 
 BIND_ME_ID = "bind_me"
 BIND_ME_NAME = "Shared - Bind to me"
@@ -376,6 +377,7 @@ class Tab:
     control_rows: list = field(default_factory=list)
     slider_values: dict = field(default_factory=dict)
     text_values: dict = field(default_factory=dict)
+    text_dirty: set = field(default_factory=set)
     display_values: dict = field(default_factory=dict)
     display_dirty: set = field(default_factory=set)
     fps: float = 0.0
@@ -561,6 +563,7 @@ def parse_config(tab: Tab, json_config):
         for text_id, default_value in text_values.items()
         if text_id in active_text_ids
     }
+    tab.text_dirty = {text_id for text_id in tab.text_dirty if text_id in active_text_ids}
     tab.layout = layout
 
     num_traces = sum(traces_per_plot)
@@ -1056,6 +1059,20 @@ async def zmq_receiver(tab: Tab):
                 tab.display_values[display_id] = value
                 tab.display_dirty.add(display_id)
 
+        elif category == RECEIVED_TEXT_INPUT:
+            payload = await sock.recv_json()
+            text_id = payload.get("id")
+            if text_id is None:
+                continue
+            value = str(payload.get("value", ""))
+            if tab.text_values.get(text_id) != value:
+                tab.text_values[text_id] = value
+                tab.text_dirty.add(text_id)
+                refresh_config_message(tab)
+                await send_control_event(
+                    tab, {"type": "text", "id": text_id, "value": value}
+                )
+
 
 ###############################
 # Pusher tasks #
@@ -1075,6 +1092,23 @@ async def display_pusher():
             t.display_dirty = set()
             await broadcast_text_tab(
                 t.id, {"type": "display_update", "tab": t.id, "values": values}
+            )
+
+
+async def text_input_pusher():
+    """Push dirty text_input values to viewers at ~30 Hz, per tab."""
+    target_dt = 1.0 / 30.0
+    while True:
+        await asyncio.sleep(target_dt)
+        if not ws_clients:
+            continue
+        for t in list(tabs.values()):
+            if not t.text_dirty:
+                continue
+            values = {k: t.text_values[k] for k in t.text_dirty}
+            t.text_dirty = set()
+            await broadcast_text_tab(
+                t.id, {"type": "text_update", "tab": t.id, "values": values}
             )
 
 
@@ -1682,11 +1716,12 @@ async def on_startup(app):
 
     app["ws_task"] = asyncio.create_task(ws_pusher())
     app["display_task"] = asyncio.create_task(display_pusher())
+    app["text_input_task"] = asyncio.create_task(text_input_pusher())
     app["resources_task"] = asyncio.create_task(resources_pusher())
 
 
 async def on_cleanup(app):
-    for key in ("ws_task", "display_task", "resources_task"):
+    for key in ("ws_task", "display_task", "text_input_task", "resources_task"):
         await _cancel_task(app.get(key))
     for t in list(tabs.values()):
         await _cancel_task(t.receiver_task)

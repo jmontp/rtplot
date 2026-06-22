@@ -1320,6 +1320,9 @@
             } else if (msg.type === 'display_update') {
               if (msg.tab && msg.tab !== activeTab) return;
               applyDisplayValues(msg.values);
+            } else if (msg.type === 'text_update') {
+              if (msg.tab && msg.tab !== activeTab) return;
+              applyTextValues(msg.values);
             } else if (msg.type === 'peer_count') {
               const n = Number(msg.count) || 0;
               if (lastStatus.peers !== n) {
