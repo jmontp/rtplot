@@ -57,6 +57,7 @@ Styled-plot dict keys:
 | `names` | **Required.** List of trace names. |
 | `colors` | Per-trace: letter (`r g b c m y k w`) or CSS string. |
 | `line_style` | `"-"` dashed, else solid. |
+| `show` | Per-trace initial visibility; use `false` to start hidden in the legend. |
 | `line_width` | Line width in pixels. |
 | `title` | Plot title. |
 | `xlabel` / `ylabel` | Axis labels. |
@@ -111,7 +112,7 @@ else is optional with a sensible default.
 
 | Class | Minimum init | Optional keyword args |
 |---|---|---|
-| `Plot` | `Plot(names=["sig"])` | `colors`, `line_style`, `line_width`, `title`, `xlabel`, `ylabel`, `yrange`, `xrange`, `height` |
+| `Plot` | `Plot(names=["sig"])` | `colors`, `line_style`, `show`, `line_width`, `title`, `xlabel`, `ylabel`, `yrange`, `xrange`, `height` |
 | `ControlsRow` | `ControlsRow([...])` | — |
 | `Button` | `Button("id", "label")` | `color`, `height` |
 | `Slider` | `Slider("id", "label", min=0, max=1)` | `value` (default `0.0`), `step`, `format`, `color`, `height` |

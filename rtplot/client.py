@@ -139,6 +139,7 @@ class Plot:
     names: List[str]
     colors: Optional[List[str]] = None
     line_style: Optional[List[str]] = None
+    show: Optional[List[bool]] = None
     line_width: Optional[float] = None
     title: Optional[str] = None
     xlabel: Optional[str] = None
@@ -152,6 +153,7 @@ class Plot:
             "names": list(self.names),
             "colors": list(self.colors) if self.colors is not None else None,
             "line_style": list(self.line_style) if self.line_style is not None else None,
+            "show": list(self.show) if self.show is not None else None,
             "line_width": self.line_width,
             "title": self.title,
             "xlabel": self.xlabel,

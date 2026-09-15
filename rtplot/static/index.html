@@ -810,6 +810,7 @@
         const colors = pcfg.colors || DEFAULT_COLORS;
         const widths = pcfg.line_width || [];
         const styles = pcfg.line_style || [];
+        const shows = pcfg.show || [];
 
         const series = [{}];
         for (let t = 0; t < traceCount; t++) {
@@ -821,6 +822,7 @@
             dash: dash || undefined,
             points: { show: false },
             spanGaps: true,
+            show: shows[t] !== false,
           });
         }
 
