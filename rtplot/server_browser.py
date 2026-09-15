@@ -20,6 +20,7 @@ subscribed tab's PUSH socket.
 
 import argparse
 import asyncio
+import base64
 import dataclasses
 import json
 import os
@@ -1498,6 +1499,7 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
 <meta charset="utf-8" />
 <title>rtplot snapshot</title>
 <style>__UPLOT_CSS__</style>
+<style>__KATEX_CSS__</style>
 <style>
   html, body { margin: 0; padding: 0; background: #fafafa; color: #222;
                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -1517,6 +1519,8 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
   &middot; drag to zoom, double-click to reset
 </p>
 <script>__UPLOT_JS__</script>
+<script>__KATEX_JS__</script>
+<script>__KATEX_AUTO_RENDER_JS__</script>
 <script>
 (function () {
   const SNAP = __SNAPSHOT_JSON__;
@@ -1577,6 +1581,15 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
                  traceCount: traceCount, startIdx: traceOffset });
     traceOffset += traceCount;
   });
+  renderMathInElement(plotsDiv, {
+    delimiters: [
+      { left: '$$', right: '$$', display: true },
+      { left: '\\\\[', right: '\\\\]', display: true },
+      { left: '\\\\(', right: '\\\\)', display: false },
+      { left: '$', right: '$', display: false },
+    ],
+    throwOnError: false,
+  });
   if (SNAP.animate) {
     let phase = 0;
     setInterval(function () {
@@ -1613,9 +1626,31 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
 try:
     _UPLOT_JS = _read_static_asset("uPlot.iife.min.js")
     _UPLOT_CSS = _read_static_asset("uPlot.min.css")
+    _KATEX_JS = _read_static_asset(os.path.join("katex", "katex.min.js"))
+    _KATEX_AUTO_RENDER_JS = _read_static_asset(
+        os.path.join("katex", "auto-render.min.js")
+    )
+    _KATEX_CSS = _read_static_asset(os.path.join("katex", "katex.min.css"))
+    # Snapshot files have no sibling font directory. Inline the vendored
+    # WOFF2 faces so equations keep their layout when opened offline.
+    _KATEX_FONT_DIR = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "static", "katex", "fonts"
+    )
+    for _font_name in os.listdir(_KATEX_FONT_DIR):
+        if not _font_name.endswith(".woff2"):
+            continue
+        with open(os.path.join(_KATEX_FONT_DIR, _font_name), "rb") as _font_file:
+            _font_data = base64.b64encode(_font_file.read()).decode("ascii")
+        _KATEX_CSS = _KATEX_CSS.replace(
+            f"url(fonts/{_font_name})",
+            f"url(data:font/woff2;base64,{_font_data})",
+        )
 except Exception as _exc:  # noqa: BLE001
     _UPLOT_JS = f"/* uPlot load failed: {_exc} */"
     _UPLOT_CSS = ""
+    _KATEX_JS = f"/* KaTeX load failed: {_exc} */"
+    _KATEX_AUTO_RENDER_JS = ""
+    _KATEX_CSS = ""
 
 
 def _build_snapshot_html(tab: Tab, animate: bool) -> str:
@@ -1665,7 +1700,13 @@ def _build_snapshot_html(tab: Tab, animate: bool) -> str:
     html = _SNAPSHOT_TEMPLATE
     html = html.replace("__UPLOT_CSS__", _UPLOT_CSS)
     html = html.replace("__UPLOT_JS__", _UPLOT_JS)
-    html = html.replace("__SNAPSHOT_JSON__", json.dumps(payload))
+    html = html.replace("__KATEX_CSS__", _KATEX_CSS)
+    html = html.replace("__KATEX_JS__", _KATEX_JS)
+    html = html.replace("__KATEX_AUTO_RENDER_JS__", _KATEX_AUTO_RENDER_JS)
+    # Keep client-supplied labels from closing the script element while
+    # preserving their exact value when JavaScript parses the payload.
+    snapshot_json = json.dumps(payload).replace("<", "\\u003c")
+    html = html.replace("__SNAPSHOT_JSON__", snapshot_json)
     return html
 
 

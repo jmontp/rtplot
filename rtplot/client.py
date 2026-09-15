@@ -659,7 +659,8 @@ def save_snapshot(path, server_url=None, animate=False, timeout=5.0):
 
     The server exposes a ``/snapshot.html`` endpoint that renders the
     current plot state as a self-contained HTML file with uPlot's JS +
-    CSS inlined plus the most recent window of trace data. The result
+    CSS inlined plus the most recent window of trace data. Vendored KaTeX
+    assets are also inlined, so LaTeX plot labels render offline. The result
     opens in any browser offline and looks pixel-identical to what the
     live tab was showing. Ideal for committing reproducible example
     previews to a repo or emailing a static "here's what I was seeing"

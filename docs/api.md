@@ -105,6 +105,29 @@ for quick scripts or when the layout comes from a config file.
 `yrange` / `xrange` accept tuples on the dataclass and lists on the
 dict form; both go over the wire as JSON lists.
 
+### LaTeX labels
+
+The browser server renders LaTeX in plot titles, axis labels, trace names,
+control labels, text/display values, and tab names. Wrap inline math in
+`$...$` or `\\(...\\)`, and display math in `$$...$$` or `\\[...\\]`.
+KaTeX and its fonts ship with the server, so rendering does not need an
+internet connection.
+
+Use Python raw strings when a formula contains backslashes:
+
+```python
+client.initialize_plots(client.Plot(
+    names=[r"$\\theta$", r"$\\dot{\\theta}$"],
+    title=r"Tracking error: $e = \\theta_d - \\theta$",
+    xlabel="time (s)",
+    ylabel=r"$\\tau$ (N m)",
+))
+```
+
+Plain text remains unchanged. Invalid formulas remain visible as source text
+instead of preventing the plot from loading. Editable `text_input` values are
+kept literal so they remain editable.
+
 ### Minimum required fields
 
 The fewest arguments needed to construct each typed class. Everything
@@ -251,9 +274,10 @@ freeze a moment:
 client.save_snapshot("preview.html", animate=True)
 ```
 
-Writes a self-contained ~65 KB file (uPlot JS/CSS inlined, current
-trace window embedded). Opens offline anywhere. Controls aren't
-captured. `animate=True` embeds a replay loop for gallery previews.
+Writes a self-contained HTML file (uPlot and KaTeX assets inlined, current
+trace window embedded). Plot titles, axes, and trace names retain their LaTeX
+rendering when the file is opened offline. Controls aren't captured.
+`animate=True` embeds a replay loop for gallery previews.
 
 `server_url` defaults to `http://localhost:8050`; set it for a remote
 server or non-default `--port`.

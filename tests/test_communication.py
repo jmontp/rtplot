@@ -26,6 +26,8 @@ import tempfile
 import time
 import unittest
 from collections import OrderedDict
+from pathlib import Path
+from urllib.request import urlopen
 
 import aiohttp
 import numpy as np
@@ -727,6 +729,78 @@ class TestControlTextUI(_ServerTest):
                 finally:
                     browser.close()
         finally:
+            zc.close()
+
+
+class TestLatexRendering(_ServerTest):
+    def test_live_view_and_offline_snapshot_render_math(self):
+        try:
+            from playwright.sync_api import Error as PlaywrightError
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            self.skipTest(f"playwright unavailable: {exc}")
+
+        zc = ZmqTestClient()
+        snapshot_path = None
+        try:
+            cfg = OrderedDict([
+                ("p0", {
+                    "names": [r"$\theta$"],
+                    "title": r"Tracking \(e^2\)",
+                    "xlabel": "time (s)",
+                    "ylabel": r"$\tau$ (N m)",
+                    "xrange": 20,
+                }),
+            ])
+            zc.send_config(cfg)
+            zc.send_data(np.linspace(0, 1, 20, dtype=np.float64).reshape(1, -1))
+
+            with sync_playwright() as p:
+                try:
+                    browser = p.chromium.launch(headless=True)
+                except PlaywrightError as exc:
+                    self.skipTest(f"playwright browser unavailable: {exc}")
+                try:
+                    page = browser.new_page()
+                    page.goto(
+                        f"http://localhost:{HTTP_PORT}/",
+                        wait_until="domcontentloaded",
+                    )
+                    page.locator(".u-title .katex").wait_for(
+                        state="visible", timeout=4000
+                    )
+                    page.locator(".u-legend .katex").wait_for(
+                        state="visible", timeout=4000
+                    )
+
+                    with urlopen(  # noqa: S310 - local test server
+                        f"http://localhost:{HTTP_PORT}/snapshot.html",
+                        timeout=5,
+                    ) as response:
+                        snapshot_html = response.read()
+                    self.assertIn(b"data:font/woff2;base64,", snapshot_html)
+                    self.assertNotIn(b'src="/static/katex/', snapshot_html)
+                    with tempfile.NamedTemporaryFile(
+                        prefix="rtplot-latex-", suffix=".html", delete=False
+                    ) as snapshot_file:
+                        snapshot_file.write(snapshot_html)
+                        snapshot_path = snapshot_file.name
+
+                    page.goto(Path(snapshot_path).as_uri(), wait_until="load")
+                    page.locator(".u-title .katex").wait_for(
+                        state="visible", timeout=4000
+                    )
+                    page.locator(".u-legend .katex").wait_for(
+                        state="visible", timeout=4000
+                    )
+                finally:
+                    browser.close()
+        finally:
+            if snapshot_path:
+                try:
+                    os.unlink(snapshot_path)
+                except OSError:
+                    pass
             zc.close()
 
 

@@ -265,6 +265,8 @@
       // a typo in someone's label can't blow up the whole page.
       const _latexDelims = [
         { left: '$$', right: '$$', display: true },
+        { left: '\\[', right: '\\]', display: true },
+        { left: '\\(', right: '\\)', display: false },
         { left: '$', right: '$', display: false },
       ];
       function renderLatexIn(el) {

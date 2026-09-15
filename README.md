@@ -103,8 +103,10 @@ A rising line now draws itself in the browser tab.
 - **Config lives with the data.** The sender declares plot layout.
 - **Interactive controls.** Buttons, sliders, dials, displays — polled
   from your loop, no threads, no callbacks.
+- **LaTeX labels.** Use `$...$` or `\\(...\\)` in plot and control text;
+  the server bundles KaTeX and works offline.
 - **Static HTML snapshots.** `save_snapshot("out.html")` writes a
-  self-contained ~65 KB file with the current trace embedded.
+  self-contained file with the current trace and math rendering embedded.
 
 ---
 
