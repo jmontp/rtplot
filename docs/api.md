@@ -109,7 +109,7 @@ dict form; both go over the wire as JSON lists.
 
 The browser server renders LaTeX in plot titles, axis labels, trace names,
 control labels, text/display values, and tab names. Wrap inline math in
-`$...$` or `\\(...\\)`, and display math in `$$...$$` or `\\[...\\]`.
+`$...$` or `\(...\)`, and display math in `$$...$$` or `\[...\]`.
 KaTeX and its fonts ship with the server, so rendering does not need an
 internet connection.
 
@@ -117,10 +117,10 @@ Use Python raw strings when a formula contains backslashes:
 
 ```python
 client.initialize_plots(client.Plot(
-    names=[r"$\\theta$", r"$\\dot{\\theta}$"],
-    title=r"Tracking error: $e = \\theta_d - \\theta$",
+    names=[r"$\theta$", r"$\dot{\theta}$"],
+    title=r"Tracking error: $e = \theta_d - \theta$",
     xlabel="time (s)",
-    ylabel=r"$\\tau$ (N m)",
+    ylabel=r"$\tau$ (N m)",
 ))
 ```
 
