@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import base64
 import dataclasses
+import hashlib
 import json
 import os
 import socket
@@ -1359,8 +1360,21 @@ def _read_static_asset(name: str) -> str:
         return fh.read()
 
 
-# Loaded once at import time so per-request cost is just the send.
+# Loaded once at import time so per-request cost is just the send. Version the
+# asset URLs by their contents: browsers can otherwise keep an old or damaged
+# KaTeX script after the executable is updated while fetching the new HTML.
 _INDEX_HTML = _read_static_asset("index.html")
+for _asset in (
+    "uPlot.min.css",
+    "uPlot.iife.min.js",
+    "katex/katex.min.css",
+    "katex/katex.min.js",
+    "katex/auto-render.min.js",
+):
+    _digest = hashlib.sha256(_read_static_asset(_asset).encode("utf-8")).hexdigest()[:12]
+    _INDEX_HTML = _INDEX_HTML.replace(
+        f'"/static/{_asset}"', f'"/static/{_asset}?v={_digest}"'
+    )
 
 
 async def handle_index(request):

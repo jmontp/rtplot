@@ -303,6 +303,26 @@
       const resTabRates = document.getElementById('res-tab-rates');
       const resUnavail = document.getElementById('res-unavail');
 
+      // A failed KaTeX download can still leave auto-render defined, but its
+      // closure then holds an undefined KaTeX reference. Retry both scripts
+      // in order with fresh URLs and render labels already on the page.
+      if (typeof katex === 'undefined') {
+        const retry = Date.now();
+        const core = document.createElement('script');
+        core.src = `/static/katex/katex.min.js?retry=${retry}`;
+        core.onload = () => {
+          if (typeof katex === 'undefined') return;
+          const autoRender = document.createElement('script');
+          autoRender.src = `/static/katex/auto-render.min.js?retry=${retry}`;
+          autoRender.onload = () => {
+            renderLatexIn(plotsDiv);
+            tabbar.querySelectorAll('.tab-name').forEach(renderLatexIn);
+          };
+          document.head.appendChild(autoRender);
+        };
+        document.head.appendChild(core);
+      }
+
       // ---- Detect the monitor's refresh rate on page load ----
       let monitorHz = 0;
       (function measureMonitorHz() {

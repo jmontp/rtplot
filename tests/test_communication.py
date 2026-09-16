@@ -733,6 +733,50 @@ class TestControlTextUI(_ServerTest):
 
 
 class TestLatexRendering(_ServerTest):
+    def test_recovers_when_initial_katex_script_is_invalid(self):
+        try:
+            from playwright.sync_api import Error as PlaywrightError
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            self.skipTest(f"playwright unavailable: {exc}")
+
+        zc = ZmqTestClient()
+        try:
+            zc.send_config(OrderedDict([
+                ("p0", {"names": ["signal"], "title": r"$e^2$"}),
+            ]))
+            with sync_playwright() as p:
+                try:
+                    browser = p.chromium.launch(headless=True)
+                except PlaywrightError as exc:
+                    self.skipTest(f"playwright browser unavailable: {exc}")
+                try:
+                    page = browser.new_page()
+                    requests = []
+
+                    def route_katex(route):
+                        requests.append(route.request.url)
+                        if "retry=" in route.request.url:
+                            route.continue_()
+                        else:
+                            route.fulfill(
+                                status=200,
+                                content_type="text/javascript",
+                                body="window.katex = )",
+                            )
+
+                    page.route("**/static/katex/katex.min.js?*", route_katex)
+                    page.goto(f"http://localhost:{HTTP_PORT}/")
+                    page.locator(".u-title .katex").wait_for(
+                        state="visible", timeout=4000
+                    )
+                    self.assertTrue(any("?v=" in url for url in requests))
+                    self.assertTrue(any("?retry=" in url for url in requests))
+                finally:
+                    browser.close()
+        finally:
+            zc.close()
+
     def test_live_view_and_offline_snapshot_render_math(self):
         try:
             from playwright.sync_api import Error as PlaywrightError
