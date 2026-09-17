@@ -43,6 +43,11 @@ Sender and server don't have to be on the same machine — see the
 No Python needed on the viewing machine. On Windows the binary opens
 a small Tk status window showing the listening URL.
 
+To arrange several plots side by side, start the server with
+`./rtplot-server --columns 2` (or `--columns 3`). The Python server accepts
+the same option: `python -m rtplot.server_browser --columns 2`. See the
+[multi-column example](examples/05_multi_column/).
+
 **Client** — pip install in the env that runs your script:
 
 ```bash

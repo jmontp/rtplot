@@ -65,6 +65,13 @@ Styled-plot dict keys:
 | `xrange` | Samples visible at once (default 200). |
 | `height` | Per-plot height multiplier (default `1.0`). |
 
+The server chooses how many plot columns to show. Start it with
+`--columns 2` (or `--columns 3`, etc.) before running a sender with
+multiple plots. The default is one column. Controls span the full width;
+plots fill the grid in the order declared. Static snapshots preserve the
+same column count. On narrow screens, the plot area scrolls horizontally
+so individual plots remain readable.
+
 `{"controls": [...]}` as an entry adds a row of [interactive
 controls](#interactive-controls) in place of a plot.
 
@@ -322,7 +329,8 @@ Persisted in `localStorage`; **Reset to defaults** clears them.
 | `--rate N` | `1000` | Max WebSocket push rate (Hz) |
 | `-n N` / `--skip N` | `1` | Push every Nth sample batch |
 | `-a` / `--adaptable` | off | Auto-tune skip rate to data rate |
-| `-c` / `--column` | row | Lay plots in columns instead of rows |
+| `--columns N` | `1` | Arrange plots in N columns (`N` must be positive) |
+| `-c` / `--column` | off | Shortcut for `--columns 2` |
 | `-d` / `--debug` | off | Extra debug logging |
 
 ---

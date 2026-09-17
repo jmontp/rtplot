@@ -98,8 +98,17 @@ parser.add_argument(
 parser.add_argument(
     "-c",
     "--column",
-    help="Create new plots in separate columns instead of rows",
-    action="store_false",
+    dest="columns",
+    help="Shortcut for --columns 2",
+    action="store_const",
+    const=2,
+)
+
+parser.add_argument(
+    "--columns",
+    type=int,
+    metavar="N",
+    help="Arrange plots in N columns (default: 1)",
 )
 
 parser.add_argument(
@@ -180,7 +189,9 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-NEW_SUBPLOT_IN_ROW = args.column
+PLOT_COLUMNS = args.columns if args.columns is not None else 1
+if PLOT_COLUMNS < 1:
+    parser.error("--columns must be at least 1")
 DEBUG_TEXT_ENABLED = args.debug
 SKIP_PLOT_DATAPOINTS = args.skip
 ADAPT_SKIP_PLOT_DATAPOINTS = args.adaptable
@@ -607,7 +618,8 @@ def build_config_message(tab: Tab, config_dict) -> dict:
         "slider_values": dict(tab.slider_values),
         "text_values": dict(tab.text_values),
         "display_values": dict(tab.display_values),
-        "row_layout": bool(NEW_SUBPLOT_IN_ROW),
+        "columns": PLOT_COLUMNS,
+        "row_layout": PLOT_COLUMNS == 1,
     }
 
 
@@ -1517,9 +1529,9 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
 <style>
   html, body { margin: 0; padding: 0; background: #fafafa; color: #222;
                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  #plots { display: flex; flex-direction: column; gap: 12px;
-           max-width: 900px; margin: 0 auto; padding: 20px 16px; }
-  .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; }
+  #plots { display: grid; grid-template-columns: repeat(var(--plot-columns, 1), minmax(320px, 1fr));
+           gap: 12px; overflow-x: auto; max-width: 900px; margin: 0 auto; padding: 20px 16px; }
+  .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; min-width: 0; }
   .snap-footer { text-align: center; font-size: 12px; color: #999; padding: 8px 0 20px; }
   .snap-footer a { color: #2a5db0; text-decoration: none; }
   .snap-footer a:hover { text-decoration: underline; }
@@ -1539,6 +1551,8 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
 (function () {
   const SNAP = __SNAPSHOT_JSON__;
   const plotsDiv = document.getElementById('plots');
+  plotsDiv.style.setProperty('--plot-columns', SNAP.columns || 1);
+  plotsDiv.style.maxWidth = `${900 * (SNAP.columns || 1)}px`;
   const COLOR_MAP = { r:'rgb(255,0,0)', g:'rgb(0,200,0)', b:'rgb(0,0,255)',
                       c:'rgb(0,200,200)', m:'rgb(200,0,200)',
                       y:'rgb(200,200,0)', k:'rgb(0,0,0)' };
@@ -1578,7 +1592,7 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
       data.push(Float64Array.from(src));
     }
     const opts = {
-      width: Math.max(640, plotsDiv.clientWidth - 40),
+      width: Math.max(240, wrap.clientWidth - 16),
       height: 260,
       title: pcfg.title || '',
       scales: {
@@ -1591,7 +1605,7 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
       cursor: { drag: { x: true, y: false } },
     };
     const u = new uPlot(opts, data, wrap);
-    plots.push({ uplot: u, data: data, xs: xs, xrange: xrange,
+    plots.push({ uplot: u, wrap: wrap, data: data, xs: xs, xrange: xrange,
                  traceCount: traceCount, startIdx: traceOffset });
     traceOffset += traceCount;
   });
@@ -1625,7 +1639,7 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
   window.addEventListener('resize', function () {
     plots.forEach(function (p) {
       p.uplot.setSize({
-        width: Math.max(640, plotsDiv.clientWidth - 40),
+        width: Math.max(240, p.wrap.clientWidth - 16),
         height: 260,
       });
     });
@@ -1707,6 +1721,7 @@ def _build_snapshot_html(tab: Tab, animate: bool) -> str:
 
     payload = {
         "plots": plots,
+        "columns": PLOT_COLUMNS,
         "num_samples": int(hi - lo),
         "trace_data": trace_data,
         "animate": bool(animate),

@@ -77,9 +77,11 @@ def _kill_listeners_on(port: int):
 class ServerProcess:
     """Starts and stops the rtplot browser server as a subprocess."""
 
-    def __init__(self, *, password: str | None = None, tabs_file: str | None = None):
+    def __init__(self, *, password: str | None = None, tabs_file: str | None = None,
+                 server_args: tuple[str, ...] = ()):
         self.password = password
         self.tabs_file = tabs_file
+        self.server_args = server_args
         self.proc: subprocess.Popen | None = None
         self.log_file = tempfile.NamedTemporaryFile(
             prefix="rtplot-test-", suffix=".log", delete=False
@@ -116,7 +118,7 @@ class ServerProcess:
 
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "rtplot.server_browser", "--no-browser",
-             "--port", str(HTTP_PORT)],
+             "--port", str(HTTP_PORT), *self.server_args],
             stdout=self.log_file,
             stderr=subprocess.STDOUT,
             cwd=REPO_ROOT,
@@ -301,6 +303,36 @@ class TestBindModeRoundtrip(_ServerTest):
                         )
                         self.assertIsNotNone(bin_msg, "no binary frame")
                         self.assertGreater(len(bin_msg), 16)
+            finally:
+                zc.close()
+        self.run_async(go())
+
+
+class TestMultiColumnLayout(_ServerTest):
+    SERVER_KWARGS = {"server_args": ("--columns", "3")}
+
+    def test_config_and_snapshot_keep_column_count(self):
+        async def go():
+            zc = ZmqTestClient()
+            try:
+                async with aiohttp.ClientSession() as s:
+                    async with s.ws_connect(f"http://localhost:{HTTP_PORT}/ws") as ws:
+                        await ws.send_str(json.dumps({"type": "tab_subscribe", "id": "bind_me"}))
+                        zc.send_config(OrderedDict([
+                            (f"p{i}", {"names": [f"signal{i}"], "title": f"Plot {i}"})
+                            for i in range(4)
+                        ]))
+                        msg = await _drain_until(
+                            ws, lambda d: isinstance(d, dict) and d.get("type") == "config"
+                        )
+                        self.assertIsNotNone(msg)
+                        self.assertEqual(msg["columns"], 3)
+                        self.assertEqual(len(msg["plots"]), 4)
+                    async with s.get(f"http://localhost:{HTTP_PORT}/snapshot.html") as response:
+                        html = await response.text()
+                        self.assertEqual(response.status, 200)
+                        self.assertIn('"columns": 3', html)
+                        self.assertIn("plotsDiv.style.setProperty('--plot-columns', SNAP.columns || 1)", html)
             finally:
                 zc.close()
         self.run_async(go())
