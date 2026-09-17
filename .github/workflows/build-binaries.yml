@@ -24,7 +24,9 @@ jobs:
           - os: windows-latest
             platform: windows-x64
             binary: rtplot-server.exe
-          - os: ubuntu-latest
+          # Build against glibc 2.35 so Ubuntu 22.04 and newer can run it.
+          # ubuntu-latest can silently raise the minimum glibc version.
+          - os: ubuntu-22.04
             platform: linux-x86_64
             binary: rtplot-server
           - os: macos-latest
@@ -44,7 +46,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install Tcl/Tk runtime (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends python3-tk
@@ -58,6 +60,10 @@ jobs:
       - name: Build rtplot-server
         shell: bash
         run: pyinstaller packaging/rtplot-server.spec --noconfirm
+
+      - name: Smoke test Linux binary
+        if: runner.os == 'Linux'
+        run: ./dist/rtplot-server --help
 
       - name: Derive version label
         id: version
