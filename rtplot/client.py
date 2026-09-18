@@ -165,6 +165,28 @@ class Plot:
 
 
 @dataclass
+class PlotRow:
+    """A group of plots with its own column count in the browser."""
+    plots: List[Union[Plot, dict]]
+    columns: int
+
+    def to_dict(self):
+        if isinstance(self.columns, bool) or not isinstance(self.columns, int) or self.columns < 1:
+            raise ValueError("PlotRow.columns must be a positive integer")
+        if not self.plots:
+            raise ValueError("PlotRow.plots must contain at least one plot")
+        plots = [
+            p.to_dict() if hasattr(p, "to_dict") else p
+            for p in self.plots
+        ]
+        if any(not isinstance(p, dict) or "names" not in p
+               or any(k in p for k in ("plots", "controls", "non_plot_labels"))
+               for p in plots):
+            raise ValueError("PlotRow can contain only plot descriptions")
+        return {"columns": self.columns, "plots": plots}
+
+
+@dataclass
 class Button:
     id: str
     label: str
@@ -455,6 +477,7 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0):
         - list of str: one plot, one trace per name
         - list of list of str: one plot per sublist
         - list of dict: multiple plots, each with full styling
+        - PlotRow or {"plots": [...], "columns": N}: a row with N columns
     handshake_timeout:
         Max seconds to wait for the config_ack. On timeout we print a
         warning and return (so an old server without the handshake

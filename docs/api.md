@@ -49,6 +49,7 @@ Each entry in `initialize_plots` is one of:
 | `[["a"], ["b", "c"]]` | one plot per sublist |
 | `{...}` | one styled plot (keys below) |
 | `[{...}, {...}]` | multiple styled plots |
+| `{"plots": [{...}, {...}], "columns": 2}` | a group of plots arranged in two columns |
 
 Styled-plot dict keys:
 
@@ -65,12 +66,40 @@ Styled-plot dict keys:
 | `xrange` | Samples visible at once (default 200). |
 | `height` | Per-plot height multiplier (default `1.0`). |
 
-The server chooses how many plot columns to show. Start it with
-`--columns 2` (or `--columns 3`, etc.) before running a sender with
-multiple plots. The default is one column. Controls span the full width;
-plots fill the grid in the order declared. Static snapshots preserve the
-same column count. On narrow screens, the plot area scrolls horizontally
-so individual plots remain readable.
+### Columns per row
+
+Declare rows in the **sender's configuration**. Start the server normally
+with `./rtplot-server` or `python -m rtplot.server_browser`; no column flag
+is required. Each row has its own positive integer `columns` count:
+
+```python
+client.initialize_plots([
+    {"columns": 2, "plots": [
+        {"names": ["position"]},
+        {"names": ["velocity"]},
+    ]},
+    {"columns": 1, "plots": [
+        {"names": ["torque"]},
+    ]},
+])
+client.send_array([position, velocity, torque])
+```
+
+In typed code, use `PlotRow([Plot(...), Plot(...)], columns=2)`.
+Plots fill each row group from left to right and wrap if there are more
+plots than columns. Send trace values in that same order, proceeding
+through the row groups from top to bottom. Rows must contain at least
+one plot; controls and nested rows belong outside a `PlotRow`.
+
+Different rows and device tabs can use different counts. Calling
+`initialize_plots` again changes the layout without restarting the server.
+Controls span the full width between row groups. Static snapshots preserve
+the grouping. Narrow windows scroll each row horizontally to keep plots
+readable. Use matching client and server versions (0.4.16 or newer).
+
+Older, ungrouped plot entries still work. Their default column count is
+one, or the server's optional `--columns N` fallback. Explicit rows always
+use the column count in the sender's configuration.
 
 `{"controls": [...]}` as an entry adds a row of [interactive
 controls](#interactive-controls) in place of a plot.
@@ -85,6 +114,7 @@ single call.
 | Dict key(s) | Typed equivalent |
 |---|---|
 | `{"names": [...], ...}` | `Plot(names=[...], ...)` |
+| `{"plots": [...], "columns": N}` | `PlotRow([...], columns=N)` |
 | `{"controls": [...]}` | `ControlsRow([...])` |
 | `{"type": "button", "id": "...", "label": "..."}` | `Button(id, label, color=None, height=None)` |
 | `{"type": "slider", ...}` | `Slider(id, label, min, max, value=0.0, step=None, format=None, color=None, height=None)` |
@@ -143,6 +173,7 @@ else is optional with a sensible default.
 | Class | Minimum init | Optional keyword args |
 |---|---|---|
 | `Plot` | `Plot(names=["sig"])` | `colors`, `line_style`, `show`, `line_width`, `title`, `xlabel`, `ylabel`, `yrange`, `xrange`, `height` |
+| `PlotRow` | `PlotRow([Plot(names=["sig"])], columns=1)` | — |
 | `ControlsRow` | `ControlsRow([...])` | — |
 | `Button` | `Button("id", "label")` | `color`, `height` |
 | `Slider` | `Slider("id", "label", min=0, max=1)` | `value` (default `0.0`), `step`, `format`, `color`, `height` |
@@ -329,7 +360,7 @@ Persisted in `localStorage`; **Reset to defaults** clears them.
 | `--rate N` | `1000` | Max WebSocket push rate (Hz) |
 | `-n N` / `--skip N` | `1` | Push every Nth sample batch |
 | `-a` / `--adaptable` | off | Auto-tune skip rate to data rate |
-| `--columns N` | `1` | Arrange plots in N columns (`N` must be positive) |
+| `--columns N` | `1` | Fallback columns for ungrouped plots; explicit client rows override it |
 | `-c` / `--column` | off | Shortcut for `--columns 2` |
 | `-d` / `--debug` | off | Extra debug logging |
 

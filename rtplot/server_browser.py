@@ -509,34 +509,53 @@ def save_persisted_tabs():
 # Config parsing (per tab) #
 ###############################
 
+def _expand_config(config):
+    """Flatten plots in wire order while retaining explicit row boundaries."""
+    plots, controls, layout = [], [], []
+    for key, entry in config.items():
+        if "non_plot_labels" in entry:
+            continue
+        if "plots" in entry:
+            columns = entry.get("columns")
+            children = entry["plots"]
+            if isinstance(columns, bool) or not isinstance(columns, int) or columns < 1:
+                raise ValueError("Plot row columns must be a positive integer")
+            if not isinstance(children, list) or not children:
+                raise ValueError("Plot row plots must be a non-empty list")
+            indices = []
+            for i, child in enumerate(children):
+                if (not isinstance(child, dict) or "names" not in child
+                        or any(k in child for k in ("plots", "controls", "non_plot_labels"))):
+                    raise ValueError("Plot rows can contain only plot descriptions")
+                indices.append(len(plots))
+                plots.append((f"{key}/{i}", child))
+            layout.append({"kind": "row", "columns": columns, "plots": indices})
+        elif "controls" in entry:
+            layout.append({"kind": "controls", "index": len(controls)})
+            controls.append(entry["controls"])
+        else:
+            layout.append({"kind": "plot", "index": len(plots)})
+            plots.append((key, entry))
+    return plots, controls, layout
+
+
 def parse_config(tab: Tab, json_config):
     """Translate a client plot config into the tab's buffer/trace metadata."""
     traces_per_plot = []
     trace_info = []
-    control_rows = []
     slider_values = {}
     text_values = {}
-    layout = []
+    plot_entries, control_rows, layout = _expand_config(json_config)
     num_datapoints_in_plot = DEFAULT_NUM_DATAPOINTS_IN_PLOT
 
-    plot_counter = 0
-    for plot_description in json_config.values():
-        # Legacy non_plot_labels rows — save-to-parquet is gone, but we
-        # accept the shape so old client scripts don't crash.
-        if "non_plot_labels" in plot_description:
-            continue
+    for row in control_rows:
+        for element in row:
+            if element.get("type") in ("slider", "dial") and "value" in element:
+                slider_values[element["id"]] = float(element["value"])
+            elif element.get("type") == "text_input":
+                text_values[element["id"]] = str(element.get("value", ""))
 
-        if "controls" in plot_description:
-            row = plot_description["controls"]
-            for element in row:
-                if element.get("type") in ("slider", "dial") and "value" in element:
-                    slider_values[element["id"]] = float(element["value"])
-                elif element.get("type") == "text_input":
-                    text_values[element["id"]] = str(element.get("value", ""))
-            layout.append({"kind": "controls", "index": len(control_rows)})
-            control_rows.append(row)
-            continue
-
+    for plot_counter, (_, plot_description) in enumerate(plot_entries):
         trace_names = plot_description["names"]
         traces_per_plot.append(len(trace_names))
 
@@ -545,9 +564,6 @@ def parse_config(tab: Tab, json_config):
 
         for name in trace_names:
             trace_info.append((name, plot_counter))
-
-        layout.append({"kind": "plot", "index": plot_counter})
-        plot_counter += 1
 
     tab.traces_per_plot = traces_per_plot
     tab.trace_labels = trace_info
@@ -589,11 +605,7 @@ def parse_config(tab: Tab, json_config):
 def build_config_message(tab: Tab, config_dict) -> dict:
     """Convert the client-supplied OrderedDict into a JSON-friendly message."""
     plots = []
-    for key, plot_description in config_dict.items():
-        if "non_plot_labels" in plot_description:
-            continue
-        if "controls" in plot_description:
-            continue
+    for key, plot_description in _expand_config(config_dict)[0]:
         plots.append(
             {
                 "key": key,
@@ -1529,8 +1541,10 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
 <style>
   html, body { margin: 0; padding: 0; background: #fafafa; color: #222;
                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  #plots { display: grid; grid-template-columns: repeat(var(--plot-columns, 1), minmax(320px, 1fr));
-           gap: 12px; overflow-x: auto; max-width: 900px; margin: 0 auto; padding: 20px 16px; }
+  #plots { display: flex; flex-direction: column; gap: 12px;
+           max-width: 900px; margin: 0 auto; padding: 20px 16px; }
+  .plot-row { display: grid; grid-template-columns: repeat(var(--plot-columns, 1), minmax(320px, 1fr));
+              gap: 12px; min-width: 0; overflow-x: auto; }
   .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; min-width: 0; }
   .snap-footer { text-align: center; font-size: 12px; color: #999; padding: 8px 0 20px; }
   .snap-footer a { color: #2a5db0; text-decoration: none; }
@@ -1551,8 +1565,17 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
 (function () {
   const SNAP = __SNAPSHOT_JSON__;
   const plotsDiv = document.getElementById('plots');
-  plotsDiv.style.setProperty('--plot-columns', SNAP.columns || 1);
-  plotsDiv.style.maxWidth = `${900 * (SNAP.columns || 1)}px`;
+  const layout = SNAP.layout || SNAP.plots.map((_, i) => ({kind: 'plot', index: i}));
+  const maxColumns = Math.max(1, ...layout.map(entry =>
+    entry.kind === 'row' ? entry.columns : (entry.kind === 'plot' ? SNAP.columns || 1 : 1)));
+  plotsDiv.style.maxWidth = `${900 * maxColumns}px`;
+  function newRow(columns) {
+    const row = document.createElement('div');
+    row.className = 'plot-row';
+    row.style.setProperty('--plot-columns', columns);
+    plotsDiv.appendChild(row);
+    return row;
+  }
   const COLOR_MAP = { r:'rgb(255,0,0)', g:'rgb(0,200,0)', b:'rgb(0,0,255)',
                       c:'rgb(0,200,200)', m:'rgb(200,0,200)',
                       y:'rgb(200,200,0)', k:'rgb(0,0,0)' };
@@ -1565,7 +1588,7 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
   }
   const plots = [];
   let traceOffset = 0;
-  SNAP.plots.forEach(function (pcfg) {
+  function buildPlot(pcfg, parent) {
     const xrange = SNAP.num_samples;
     const xs = new Float64Array(xrange);
     for (let i = 0; i < xrange; i++) xs[i] = i;
@@ -1585,7 +1608,7 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
     }
     const wrap = document.createElement('div');
     wrap.className = 'plot-wrap';
-    plotsDiv.appendChild(wrap);
+    parent.appendChild(wrap);
     const data = [xs];
     for (let t = 0; t < traceCount; t++) {
       const src = SNAP.trace_data[traceOffset + t];
@@ -1608,6 +1631,20 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
     plots.push({ uplot: u, wrap: wrap, data: data, xs: xs, xrange: xrange,
                  traceCount: traceCount, startIdx: traceOffset });
     traceOffset += traceCount;
+  }
+  let implicitRow = null;
+  layout.forEach(entry => {
+    if (entry.kind === 'plot') {
+      if (!implicitRow) implicitRow = newRow(SNAP.columns || 1);
+      buildPlot(SNAP.plots[entry.index], implicitRow);
+    } else if (entry.kind === 'row') {
+      implicitRow = null;
+      const row = newRow(entry.columns);
+      entry.plots.forEach(index => buildPlot(SNAP.plots[index], row));
+    } else {
+      // Snapshots omit controls, but retain the row break around them.
+      implicitRow = null;
+    }
   });
   renderMathInElement(plotsDiv, {
     delimiters: [
@@ -1699,9 +1736,7 @@ def _build_snapshot_html(tab: Tab, animate: bool) -> str:
 
     plots = []
     cfg = tab.config_dict or OrderedDict()
-    for key, plot_description in cfg.items():
-        if "non_plot_labels" in plot_description or "controls" in plot_description:
-            continue
+    for key, plot_description in _expand_config(cfg)[0]:
         plots.append({
             "key": key,
             "names": plot_description.get("names", []),
@@ -1722,6 +1757,7 @@ def _build_snapshot_html(tab: Tab, animate: bool) -> str:
     payload = {
         "plots": plots,
         "columns": PLOT_COLUMNS,
+        "layout": tab.layout,
         "num_samples": int(hi - lo),
         "trace_data": trace_data,
         "animate": bool(animate),

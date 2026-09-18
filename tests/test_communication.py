@@ -332,10 +332,105 @@ class TestMultiColumnLayout(_ServerTest):
                         html = await response.text()
                         self.assertEqual(response.status, 200)
                         self.assertIn('"columns": 3', html)
-                        self.assertIn("plotsDiv.style.setProperty('--plot-columns', SNAP.columns || 1)", html)
+                        payload, _ = json.JSONDecoder().raw_decode(html.split("const SNAP = ", 1)[1])
+                        self.assertEqual(payload["columns"], 3)
+                        self.assertEqual(len(payload["plots"]), 4)
             finally:
                 zc.close()
         self.run_async(go())
+
+
+class TestClientPlotRows(_ServerTest):
+    def _publish(self, layout, count):
+        code = f"""
+import numpy as np
+import time
+from rtplot import client
+from rtplot.client import Plot, PlotRow, ControlsRow, Button
+client.local_plot()
+def plot(name):
+    return Plot(names=[name], title=name, xrange=20)
+client.initialize_plots({layout})
+client.send_array(np.repeat(np.arange(1, {count + 1})[:, None], 20, axis=1).astype('float64'))
+time.sleep(0.1)
+"""
+        subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT,
+                       check=True, capture_output=True, timeout=10)
+
+    def _assert_geometry(self, page, counts, columns=None):
+        page.wait_for_function(
+            "n => document.querySelectorAll('.plot-wrap .uplot').length === n",
+            arg=sum(counts),
+        )
+        rows = page.locator(".plot-row").evaluate_all("""rows => rows.map(row => ({
+            width: row.getBoundingClientRect().width,
+            plots: Array.from(row.querySelectorAll('.plot-wrap')).map(p => ({
+                x: p.getBoundingClientRect().x, y: p.getBoundingClientRect().y,
+                width: p.getBoundingClientRect().width,
+                canvasWidth: p.querySelector('.uplot').getBoundingClientRect().width
+            }))
+        }))""")
+        self.assertEqual([len(r["plots"]) for r in rows], counts)
+        for row, columns in zip(rows, columns or counts):
+            for index, plot in enumerate(row["plots"]):
+                self.assertAlmostEqual(plot["width"], (row["width"] - 12 * (columns - 1)) / columns, delta=2)
+                self.assertAlmostEqual(plot["canvasWidth"], plot["width"] - 18, delta=2)
+                if index < columns:
+                    self.assertAlmostEqual(plot["y"], row["plots"][0]["y"], delta=1)
+                else:
+                    self.assertGreater(plot["y"], row["plots"][index - columns]["y"])
+                if index % columns:
+                    self.assertGreater(plot["x"], row["plots"][index - 1]["x"])
+
+    def test_mixed_rows_live_snapshot_and_reconfigure(self):
+        try:
+            from playwright.sync_api import Error as PlaywrightError
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            self.skipTest(f"playwright unavailable: {exc}")
+
+        # Typed and dict rows can be mixed, with ordinary controls between them.
+        self._publish("""[
+            PlotRow([plot('a'), plot('b')], columns=2),
+            {'plots': [plot('c').to_dict()], 'columns': 1},
+            ControlsRow([Button('go', 'Go')]),
+            PlotRow([plot('d'), plot('e'), plot('f')], columns=3),
+        ]""", 6)
+        with tempfile.TemporaryDirectory(prefix="rtplot-row-snapshot-") as tmp:
+            with sync_playwright() as p:
+                try:
+                    browser = p.chromium.launch(headless=True)
+                except PlaywrightError as exc:
+                    self.skipTest(f"playwright browser unavailable: {exc}")
+                try:
+                    page = browser.new_page(viewport={"width": 1440, "height": 1200})
+                    errors = []
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.goto(f"http://localhost:{HTTP_PORT}/")
+                    self._assert_geometry(page, [2, 1, 3])
+                    self.assertEqual(page.locator(".ctrl-row").count(), 1)
+                    page.set_viewport_size({"width": 1200, "height": 1200})
+                    page.wait_for_timeout(100)
+                    self._assert_geometry(page, [2, 1, 3])
+
+                    with urlopen(f"http://localhost:{HTTP_PORT}/snapshot.html", timeout=5) as response:
+                        html = response.read().decode()
+                    payload, _ = json.JSONDecoder().raw_decode(html.split("const SNAP = ", 1)[1])
+                    self.assertEqual([p["names"] for p in payload["plots"]], [[n] for n in "abcdef"])
+                    for i, trace in enumerate(payload["trace_data"]):
+                        self.assertEqual(trace, [float(i + 1)] * 20)
+                    snapshot = Path(tmp) / "snapshot.html"
+                    snapshot.write_text(html)
+                    page.goto(snapshot.as_uri())
+                    self._assert_geometry(page, [2, 1, 3])
+
+                    page.goto(f"http://localhost:{HTTP_PORT}/")
+                    self._publish("[PlotRow([plot('new0'), plot('new1'), plot('new2')], columns=2)]", 3)
+                    self._assert_geometry(page, [3], columns=[2])
+                    self.assertEqual(page.locator(".ctrl-row").count(), 0)
+                    self.assertEqual(errors, [])
+                finally:
+                    browser.close()
 
 
 class TestTabCRUD(_ServerTest):
@@ -446,6 +541,30 @@ class TestTabPersistence(unittest.TestCase):
 
 
 class TestInvalidConfig(_ServerTest):
+    def test_invalid_row_dicts_are_rejected_and_recover(self):
+        async def go():
+            zc = ZmqTestClient()
+            try:
+                async with aiohttp.ClientSession() as s:
+                    async with s.ws_connect(f"http://localhost:{HTTP_PORT}/ws") as ws:
+                        await ws.send_str(json.dumps({"type": "tab_subscribe", "id": "bind_me"}))
+                        await _drain_until(ws, lambda d: isinstance(d, dict) and d.get("type") in ("no_config", "config"))
+                        invalid = [{"columns": n, "plots": [{"names": ["x"]}]} for n in (0, -1, True, 1.5, "2")]
+                        invalid += [{"columns": 1, "plots": []}, {"columns": 2, "plots": [{"controls": []}]}]
+                        for row in invalid:
+                            zc.send_config(OrderedDict([("row", row)]))
+                            msg = await _drain_until(ws, lambda d: isinstance(d, dict) and d.get("type") == "tab"
+                                                    and d["tab"].get("last_config_error"))
+                            self.assertIsNotNone(msg)
+                            self.assertIn("ValueError", msg["tab"]["last_config_error"]["message"])
+                        zc.send_config(OrderedDict([("row", {"columns": 1, "plots": [{"names": ["ok"]}]})]))
+                        cfg = await _drain_until(ws, lambda d: isinstance(d, dict) and d.get("type") == "config")
+                        self.assertIsNotNone(cfg)
+                        self.assertEqual(cfg["plots"][0]["names"], ["ok"])
+            finally:
+                zc.close()
+        self.run_async(go())
+
     def test_bad_config_sets_error_and_clears_on_good(self):
         async def go():
             zc = ZmqTestClient()

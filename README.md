@@ -43,10 +43,11 @@ Sender and server don't have to be on the same machine — see the
 No Python needed on the viewing machine. On Windows the binary opens
 a small Tk status window showing the listening URL.
 
-To arrange several plots side by side, start the server with
-`./rtplot-server --columns 2` (or `--columns 3`). The Python server accepts
-the same option: `python -m rtplot.server_browser --columns 2`. See the
-[multi-column example](examples/05_multi_column/).
+Set columns per row in your sender's layout with
+`PlotRow([Plot(names=["a"]), Plot(names=["b"])], columns=2)`.
+Start the server normally; each row can use a different column count.
+See the [multi-column example](examples/05_multi_column/) for typed and
+dict forms, including a layout with two, one, and three columns.
 
 **Client** — pip install in the env that runs your script:
 

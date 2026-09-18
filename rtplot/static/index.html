@@ -62,9 +62,9 @@
   #ws-status { font-size: calc(12px * var(--ui-scale)); color: #666; margin-left: auto; }
 
   /* -------- Plots + controls (existing) -------- */
-  #plots { display: grid; grid-template-columns: repeat(var(--plot-columns, 1), minmax(320px, 1fr)); padding: 12px; gap: 12px; overflow-x: auto; }
+  #plots { display: flex; flex-direction: column; padding: 12px; gap: 12px; }
+  .plot-row { display: grid; grid-template-columns: repeat(var(--plot-columns, 1), minmax(320px, 1fr)); gap: 12px; min-width: 0; overflow-x: auto; }
   .plot-wrap { background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 8px; min-width: 0; }
-  #plots .ctrl-row, #plots #empty-state { grid-column: 1 / -1; }
   .plot-title { font-size: 13px; font-weight: 600; margin: 0 0 4px 4px; color: #333; }
   #empty-state { padding: 28px 32px; color: #888; font-size: calc(14px * var(--ui-scale)); font-style: italic; }
   /* Persistent banner the server raises when a client-supplied plot
@@ -822,7 +822,7 @@
         plotsDiv.appendChild(d);
       }
 
-      function buildOnePlot(pcfg, rowLayout, traceOffset) {
+      function buildOnePlot(pcfg, rowLayout, traceOffset, parent) {
         const xrange = pcfg.xrange || 200;
         const xs = new Float64Array(xrange);
         for (let i = 0; i < xrange; i++) xs[i] = i;
@@ -854,7 +854,7 @@
           : baseHeight;
         const wrap = document.createElement('div');
         wrap.className = 'plot-wrap';
-        plotsDiv.appendChild(wrap);
+        parent.appendChild(wrap);
 
         const opts = {
           width: Math.max(240, wrap.clientWidth - 16),
@@ -900,7 +900,13 @@
       function buildPlots(cfg) {
         destroyPlots();
         const columns = Number(cfg.columns) || (cfg.row_layout === false ? 2 : 1);
-        plotsDiv.style.setProperty('--plot-columns', Math.max(1, Math.floor(columns)));
+        function newRow(count) {
+          const row = document.createElement('div');
+          row.className = 'plot-row';
+          row.style.setProperty('--plot-columns', Math.max(1, Math.floor(count)));
+          plotsDiv.appendChild(row);
+          return row;
+        }
 
         const controls = cfg.controls || [];
         const layout = (cfg.layout && cfg.layout.length)
@@ -909,12 +915,21 @@
               .concat(controls.map((_, idx) => ({ kind: 'controls', index: idx })));
 
         let traceOffset = 0;
+        let implicitRow = null;
         layout.forEach(entry => {
           if (entry.kind === 'plot') {
             const pcfg = cfg.plots[entry.index];
             if (!pcfg) return;
-            traceOffset += buildOnePlot(pcfg, columns === 1, traceOffset);
+            if (!implicitRow) implicitRow = newRow(columns);
+            traceOffset += buildOnePlot(pcfg, columns === 1, traceOffset, implicitRow);
+          } else if (entry.kind === 'row') {
+            implicitRow = null;
+            const row = newRow(entry.columns);
+            entry.plots.forEach(index => {
+              traceOffset += buildOnePlot(cfg.plots[index], entry.columns === 1, traceOffset, row);
+            });
           } else if (entry.kind === 'controls') {
+            implicitRow = null;
             const row = controls[entry.index];
             if (!row) return;
             plotsDiv.appendChild(buildControlRow(row));

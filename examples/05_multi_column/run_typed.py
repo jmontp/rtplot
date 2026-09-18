@@ -1,18 +1,26 @@
-"""Typed equivalent of run.py's four-plot multi-column example."""
+"""Typed equivalent of run.py's rows with two, one, and three columns."""
 
 import math
 import time
 from pathlib import Path
 
 from rtplot import client
-from rtplot.client import Plot
+from rtplot.client import Plot, PlotRow
 
 client.local_plot()
 client.initialize_plots([
-    Plot(names=["sine"], title="Sine", yrange=(-1.2, 1.2)),
-    Plot(names=["cosine"], title="Cosine", yrange=(-1.2, 1.2)),
-    Plot(names=["slow sine"], title="Slow sine", yrange=(-1.2, 1.2)),
-    Plot(names=["beat"], title="Beat", yrange=(-1.2, 1.2)),
+    PlotRow([
+        Plot(names=["sine"], title="Sine", yrange=(-1.2, 1.2)),
+        Plot(names=["cosine"], title="Cosine", yrange=(-1.2, 1.2)),
+    ], columns=2),
+    PlotRow([
+        Plot(names=["slow sine"], title="Slow sine", yrange=(-1.2, 1.2)),
+    ], columns=1),
+    PlotRow([
+        Plot(names=["beat"], title="Beat", yrange=(-1.2, 1.2)),
+        Plot(names=["ramp"], title="Ramp", yrange=(-1.2, 1.2)),
+        Plot(names=["square"], title="Square", yrange=(-1.2, 1.2)),
+    ], columns=3),
 ])
 
 for i in range(500):
@@ -22,6 +30,8 @@ for i in range(500):
         math.cos(2 * math.pi * t),
         math.sin(math.pi * t),
         math.sin(2 * math.pi * t) * math.sin(0.2 * math.pi * t),
+        2 * (t % 1) - 1,
+        1.0 if math.sin(2 * math.pi * t) >= 0 else -1.0,
     ])
     time.sleep(0.02)
 
