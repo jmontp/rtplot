@@ -31,6 +31,8 @@ identical on-the-wire config.
 | [04 – Colored controls](04_typed_configuration/) | Same as 03, plus the `color` option on buttons, slider, and dial. | [run_dict.py](04_typed_configuration/run_dict.py) | [run.py](04_typed_configuration/run.py) | — |
 | [05 – Multi-column layout](05_multi_column/) | Declare rows with two, one, and three columns in the sender. | [run.py](05_multi_column/run.py) | [run_typed.py](05_multi_column/run_typed.py) | [snapshot](05_multi_column/snapshot.html) |
 
+| [06 – Sections and live state](06_sections/) | Persistent status, collapsible sections, unavailable actions, and synthetic recovery. | [run.py](06_sections/run.py) | [run_typed.py](06_sections/run_typed.py) | Live UI |
+
 ## How to run an example
 
 Each example script assumes a browser server is already running. Start

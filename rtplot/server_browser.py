@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Optional
 
+from .ui_state import META_KEY, CAPABILITIES, CONTROL_DEFAULTS, declarations, merge_state
+
 import numpy as np
 import zmq
 import zmq.asyncio
@@ -229,6 +231,8 @@ RECEIVED_DATA = 1
 SAVE_PLOT = 3
 RECEIVED_DISPLAY = 4
 RECEIVED_TEXT_INPUT = 5
+RECEIVED_UI_STATE = 6
+SOURCE_STALE_SECONDS = 5.0
 
 BIND_ME_ID = "bind_me"
 BIND_ME_NAME = "Shared - Bind to me"
@@ -376,6 +380,18 @@ class Tab:
     # Plot state
     config_dict: Optional["OrderedDict"] = None
     config_message: Optional[dict] = None
+    session: Optional[str] = None
+    generation: int = 0
+    view: dict = field(default_factory=dict)
+    control_registry: dict = field(default_factory=dict)
+    ui_state: dict = field(default_factory=lambda: {"controls": {}, "sections": {}})
+    ui_revision: int = -1
+    ui_dirty: bool = False
+    source_available: bool = False
+    source_reason: str = "Waiting for source"
+    source_epoch: str = field(default_factory=lambda: uuid.uuid4().hex)
+    source_last_seen: float = 0.0
+    source_last_ack: float = 0.0
     initialized: bool = False
     num_datapoints_in_plot: int = DEFAULT_NUM_DATAPOINTS_IN_PLOT
     li: int = DEFAULT_NUM_DATAPOINTS_IN_PLOT
@@ -456,6 +472,8 @@ def tab_public(t: Tab) -> dict:
         "status": t.status,
         "error": t.error,
         "last_config_error": t.last_config_error,
+        "source_available": t.source_available,
+        "source_reason": t.source_reason,
     }
 
 
@@ -509,6 +527,106 @@ def save_persisted_tabs():
 # Config parsing (per tab) #
 ###############################
 
+def config_metadata(config):
+    meta = config.get(META_KEY, {}).get("rtplot", {})
+    if meta:
+        if not isinstance(meta.get("session"), str) or not meta["session"]:
+            raise ValueError("Invalid layout session")
+        for key in ("generation", "revision"):
+            if type(meta.get(key)) is not int or meta[key] < 0:
+                raise ValueError(f"Invalid layout {key}")
+    return meta
+
+
+def accept_ui_snapshot(tab, payload):
+    if (payload.get("session"), payload.get("generation")) != (tab.session, tab.generation) or tab.session is None:
+        return False
+    revision = payload.get("revision")
+    if type(revision) is not int or revision < 0:
+        return False
+    if revision > tab.ui_revision:
+        state = merge_state({"controls": {}, "sections": {}}, payload.get("state", {}), tab.control_registry, tab.view)
+        tab.ui_state = state
+        tab.ui_revision = revision
+        tab.ui_dirty = True
+    return True
+
+
+def ui_snapshot(tab):
+    return {"type": "ui_state", "tab": tab.id, "session": tab.session,
+            "generation": tab.generation, "revision": tab.ui_revision, "state": tab.ui_state}
+
+
+async def config_ack(tab, force=True):
+    now = perf_counter()
+    if not force and now - tab.source_last_ack < 1.0:
+        return
+    tab.source_last_ack = now
+    await send_control_event(tab, {"type": "config_ack", "session": tab.session,
+                                  "generation": tab.generation, "source_epoch": tab.source_epoch,
+                                  "capabilities": CAPABILITIES})
+
+
+async def source_availability(tab, available, reason="", reset_queue=True):
+    if available:
+        tab.source_last_seen = perf_counter()
+    if available == tab.source_available and reason == tab.source_reason:
+        return
+    tab.source_available, tab.source_reason = available, reason
+    if not available:
+        tab.source_epoch = uuid.uuid4().hex
+        # Detach before closing so concurrent sends cannot use a closed socket.
+        if reset_queue and tab.ctrl_sock is not None:
+            old, tab.ctrl_sock = tab.ctrl_sock, None
+            old.close(0)
+            await broadcast_tab(tab.id)
+            # ZMQ releases bound endpoints asynchronously after close().
+            for attempt in range(20):
+                ctrl = zmq_ctx.socket(zmq.PUSH)
+                ctrl.setsockopt(zmq.LINGER, 0)
+                ctrl.setsockopt(zmq.IMMEDIATE, 1)
+                ctrl.setsockopt(zmq.SNDHWM, 1000)
+                try:
+                    if tab.mode == "bind":
+                        ctrl.bind(f"tcp://*:{ZMQ_CONTROL_PORT}")
+                    else:
+                        endpoint, _ = _normalize_connect_target(_control_target_from_data(tab.endpoint), port=ZMQ_CONTROL_PORT)
+                        ctrl.connect(endpoint)
+                    tab.ctrl_sock = ctrl
+                    break
+                except zmq.ZMQError as exc:
+                    ctrl.close(0)
+                    if exc.errno != zmq.EADDRINUSE or attempt == 19:
+                        print(f"[{tab.id}] Control socket recovery failed: {exc}")
+                        break
+                    await asyncio.sleep(0.01)
+    elif tab.session is not None:
+        await config_ack(tab)
+    await broadcast_tab(tab.id)
+
+
+def control_allowed(tab, payload, kind):
+    if not tab.source_available:
+        return False
+    # Legacy WebSocket integrations omit tokens. Modern viewers always include
+    # them; reject mismatches while retaining the existing command shape.
+    if ("session" in payload or "generation" in payload) and (payload.get("session"), payload.get("generation")) != (tab.session, tab.generation):
+        return False
+    cid = payload.get("id")
+    info = tab.control_registry.get(cid)
+    if info is None:
+        # Older integrations used the return channel for undeclared IDs.
+        return "session" not in payload and "generation" not in payload
+    if info["type"] not in kind:
+        return False
+    state = {**CONTROL_DEFAULTS, **tab.ui_state.get("controls", {}).get(cid, {})}
+    if not state["enabled"] or not state["visible"]:
+        return False
+    sid = info.get("section")
+    section = next((s for s in tab.view.get("sections", []) if s["id"] == sid), {})
+    return tab.ui_state.get("sections", {}).get(sid, {}).get("visible", section.get("visible", True))
+
+
 def _expand_config(config):
     """Flatten plots in wire order while retaining explicit row boundaries."""
     plots, controls, layout = [], [], []
@@ -529,18 +647,21 @@ def _expand_config(config):
                     raise ValueError("Plot rows can contain only plot descriptions")
                 indices.append(len(plots))
                 plots.append((f"{key}/{i}", child))
-            layout.append({"kind": "row", "columns": columns, "plots": indices})
+            layout.append({"kind": "row", "columns": columns, "plots": indices, "section": entry.get("section")})
         elif "controls" in entry:
-            layout.append({"kind": "controls", "index": len(controls)})
+            layout.append({"kind": "controls", "index": len(controls), "section": entry.get("section")})
             controls.append(entry["controls"])
         else:
-            layout.append({"kind": "plot", "index": len(plots)})
+            layout.append({"kind": "plot", "index": len(plots), "section": entry.get("section")})
             plots.append((key, entry))
     return plots, controls, layout
 
 
 def parse_config(tab: Tab, json_config):
     """Translate a client plot config into the tab's buffer/trace metadata."""
+    meta = config_metadata(json_config)
+    view, registry = declarations(json_config, meta.get("view"))
+    initial_state = merge_state({"controls": {}, "sections": {}}, meta.get("state", {}), registry, view)
     traces_per_plot = []
     trace_info = []
     slider_values = {}
@@ -565,6 +686,14 @@ def parse_config(tab: Tab, json_config):
         for name in trace_names:
             trace_info.append((name, plot_counter))
 
+    tab.view = view
+    tab.control_registry = registry
+    tab.session = meta.get("session")
+    tab.generation = meta.get("generation", 0)
+    tab.ui_state = initial_state
+    tab.ui_revision = meta.get("revision", 0)
+    tab.ui_dirty = False
+    tab.source_epoch = uuid.uuid4().hex
     tab.traces_per_plot = traces_per_plot
     tab.trace_labels = trace_info
     tab.control_rows = control_rows
@@ -632,6 +761,13 @@ def build_config_message(tab: Tab, config_dict) -> dict:
         "display_values": dict(tab.display_values),
         "columns": PLOT_COLUMNS,
         "row_layout": PLOT_COLUMNS == 1,
+        "view": tab.view,
+        "session": tab.session,
+        "generation": tab.generation,
+        "ui_state": tab.ui_state,
+        "ui_revision": tab.ui_revision,
+        "source_available": tab.source_available,
+        "source_reason": tab.source_reason,
     }
 
 
@@ -793,28 +929,26 @@ def _open_tab_sockets(tab: Tab):
             ctrl = zmq_ctx.socket(zmq.PUSH)
             ctrl.setsockopt(zmq.SNDHWM, 1000)
             ctrl.setsockopt(zmq.LINGER, 0)
+            ctrl.setsockopt(zmq.IMMEDIATE, 1)
 
+            monitor = data.get_monitor_socket(
+                zmq.EVENT_CONNECTED | zmq.EVENT_ACCEPTED | zmq.EVENT_DISCONNECTED
+                | zmq.EVENT_CONNECT_DELAYED | zmq.EVENT_CONNECT_RETRIED)
             if tab.mode == "bind":
                 data.bind(f"tcp://*:{ZMQ_DEFAULT_PORT}")
                 ctrl.bind(f"tcp://*:{ZMQ_CONTROL_PORT}")
                 tab.endpoint = f"*:{ZMQ_DEFAULT_PORT}"
                 print(f"[{tab.id}] ZMQ: bound on tcp://*:{ZMQ_DEFAULT_PORT}")
             else:
-                monitor = data.get_monitor_socket(
-                    zmq.EVENT_CONNECTED
-                    | zmq.EVENT_DISCONNECTED
-                    | zmq.EVENT_CONNECT_DELAYED
-                    | zmq.EVENT_CONNECT_RETRIED
-                )
                 data.connect(connect_data_ep)
                 ctrl_ep, _ = _normalize_connect_target(
                     _control_target_from_data(tab.endpoint), port=ZMQ_CONTROL_PORT
                 )
                 ctrl.connect(ctrl_ep)
                 tab.endpoint = connect_label
-                tab.monitor_task = asyncio.create_task(zmq_monitor(tab, monitor))
                 print(f"[{tab.id}] ZMQ: connecting to {connect_data_ep} (ctrl {ctrl_ep})")
 
+            tab.monitor_task = asyncio.create_task(zmq_monitor(tab, monitor))
             tab.data_sock = data
             tab.ctrl_sock = ctrl
             tab.status = "idle"
@@ -869,17 +1003,18 @@ async def _cancel_task(task):
 
 
 async def zmq_monitor(tab: Tab, monitor_sock):
-    """Track transport-level ZMQ state for connect-mode tabs."""
+    """Track transport availability and connect-mode tab status."""
     try:
         while True:
             evt = await recv_monitor_message(monitor_sock)
             event = evt.get("event")
-            if event == zmq.EVENT_CONNECTED:
+            if event in (zmq.EVENT_CONNECTED, zmq.EVENT_ACCEPTED):
                 if tab.status in ("connecting", "idle") and not tab.initialized:
                     tab.status = "connected"
                     tab.error = None
                     await broadcast_tab(tab.id)
             elif event == zmq.EVENT_DISCONNECTED:
+                await source_availability(tab, False, "Source disconnected")
                 if tab.mode == "connect":
                     host_reachable, rtplot_ports_open, peer_err = _probe_connect_target(tab.endpoint)
                     if host_reachable and not rtplot_ports_open:
@@ -928,8 +1063,16 @@ async def send_control_event(tab: Tab, event):
     """Forward a control event to the user's Python process, best-effort."""
     if tab.ctrl_sock is None:
         return
+    if event.get("type") in ("button", "slider", "text") and tab.session is not None:
+        event = {**event, "session": tab.session, "generation": tab.generation,
+                 "source_epoch": tab.source_epoch}
+    sock = tab.ctrl_sock
     try:
-        await tab.ctrl_sock.send_json(event, flags=zmq.DONTWAIT)
+        await sock.send_json(event, flags=zmq.DONTWAIT)
+    except asyncio.CancelledError:
+        # Closing a socket cancels its pending asyncio Future, not this task.
+        if not sock.closed:
+            raise
     except zmq.Again:
         pass
     except zmq.ZMQError:
@@ -995,6 +1138,21 @@ async def zmq_receiver(tab: Tab):
                 continue
 
             try:
+                meta = config_metadata(cfg)
+                if meta and meta["session"] == tab.session:
+                    if meta["generation"] < tab.generation:
+                        continue
+                    if meta["generation"] == tab.generation and tab.initialized:
+                        old = {k: v for k, v in tab.config_dict.items() if k != META_KEY}
+                        new = {k: v for k, v in cfg.items() if k != META_KEY}
+                        if old != new or declarations(cfg, meta.get("view"))[0] != tab.view:
+                            raise ValueError("Layout changed without a new generation")
+                        accept_ui_snapshot(tab, meta)
+                        await source_availability(tab, True)
+                        await config_ack(tab)
+                        refresh_config_message(tab)
+                        await broadcast_text_tab(tab.id, tab.config_message)
+                        continue
                 parse_config(tab, cfg)
             except Exception as exc:  # noqa: BLE001
                 msg = f"Configuration rejected: {type(exc).__name__}: {exc}"
@@ -1005,6 +1163,7 @@ async def zmq_receiver(tab: Tab):
 
             tab.last_config_error = None  # clear: this one was good
             tab.config_dict = cfg
+            await source_availability(tab, True)
             refresh_config_message(tab)
             tab.initialized = True
             fps = None
@@ -1017,7 +1176,7 @@ async def zmq_receiver(tab: Tab):
             # slow-joiner window so it can stop resending and return.
             # Old clients ignore unknown event types, so this is safe
             # to emit unconditionally.
-            await send_control_event(tab, {"type": "config_ack"})
+            await config_ack(tab)
             await broadcast_text_tab(tab.id, tab.config_message)
             await broadcast_tab(tab.id)
             snap = make_snapshot_message(tab)
@@ -1038,6 +1197,7 @@ async def zmq_receiver(tab: Tab):
             arr = await _recv_array_async(sock)
             if not tab.initialized:
                 continue
+            await source_availability(tab, True)
             tab.ensure_buffer()
 
             num_values = arr.shape[1]
@@ -1073,6 +1233,16 @@ async def zmq_receiver(tab: Tab):
             except Exception:  # noqa: BLE001
                 pass
 
+        elif category == RECEIVED_UI_STATE:
+            try:
+                payload = await sock.recv_json()
+                if accept_ui_snapshot(tab, payload):
+                    await source_availability(tab, True)
+                    await config_ack(tab, force=False)
+            except (ValueError, TypeError, AttributeError):
+                # Invalid or stale state cannot disrupt the data receiver.
+                continue
+
         elif category == RECEIVED_DISPLAY:
             payload = await sock.recv_json()
             display_id = payload.get("id")
@@ -1103,6 +1273,18 @@ async def zmq_receiver(tab: Tab):
 ###############################
 # Pusher tasks #
 ###############################
+
+async def ui_state_pusher():
+    """One pending snapshot per tab, coalesced to at most 30 Hz."""
+    while True:
+        await asyncio.sleep(1 / 30)
+        for tab in list(tabs.values()):
+            if tab.session is not None and tab.source_available and perf_counter() - tab.source_last_seen > SOURCE_STALE_SECONDS:
+                await source_availability(tab, False, "Source stale — no data or heartbeat for 5 seconds")
+            if tab.ui_dirty:
+                tab.ui_dirty = False
+                await broadcast_text_tab(tab.id, ui_snapshot(tab))
+
 
 async def display_pusher():
     """Push any dirty display-box values to viewers at ~30 Hz, per tab."""
@@ -1358,6 +1540,7 @@ async def reconnect_tab(tab_id: str):
     t = tabs.get(tab_id)
     if t is None:
         return
+    await source_availability(t, False, "Reconnecting to source", reset_queue=False)
     await _cancel_task(t.receiver_task)
     await _cancel_task(t.monitor_task)
     t.monitor_task = None
@@ -1389,6 +1572,8 @@ def _read_static_asset(name: str) -> str:
 # KaTeX script after the executable is updated while fetching the new HTML.
 _INDEX_HTML = _read_static_asset("index.html")
 for _asset in (
+    "ui-view.js",
+    "ui-view.css",
     "uPlot.min.css",
     "uPlot.iife.min.js",
     "katex/katex.min.css",
@@ -1489,7 +1674,7 @@ async def handle_ws(request):
                     btn_id = payload.get("id")
                     tid = ws_tab.get(ws, BIND_ME_ID)
                     t = tabs.get(tid)
-                    if btn_id and t is not None:
+                    if btn_id and t is not None and control_allowed(t, payload, {"button"}):
                         await send_control_event(
                             t, {"type": "button", "id": btn_id}
                         )
@@ -1502,7 +1687,7 @@ async def handle_ws(request):
                         value = 0.0
                     tid = ws_tab.get(ws, BIND_ME_ID)
                     t = tabs.get(tid)
-                    if sid and t is not None:
+                    if sid and t is not None and control_allowed(t, payload, {"slider", "dial"}):
                         t.slider_values[sid] = value
                         refresh_config_message(t)
                         await send_control_event(
@@ -1512,7 +1697,7 @@ async def handle_ws(request):
                     text_id = payload.get("id")
                     tid = ws_tab.get(ws, BIND_ME_ID)
                     t = tabs.get(tid)
-                    if text_id and t is not None:
+                    if text_id and t is not None and control_allowed(t, payload, {"text_input"}):
                         value = str(payload.get("value", ""))
                         t.text_values[text_id] = value
                         refresh_config_message(t)
@@ -1820,6 +2005,7 @@ async def on_startup(app):
         if existing is None:
             await create_connect_tab(f"CLI {label}", args.pi_ip, persist=False)
 
+    app["ui_state_task"] = asyncio.create_task(ui_state_pusher())
     app["ws_task"] = asyncio.create_task(ws_pusher())
     app["display_task"] = asyncio.create_task(display_pusher())
     app["text_input_task"] = asyncio.create_task(text_input_pusher())
@@ -1827,7 +2013,7 @@ async def on_startup(app):
 
 
 async def on_cleanup(app):
-    for key in ("ws_task", "display_task", "text_input_task", "resources_task"):
+    for key in ("ws_task", "display_task", "text_input_task", "resources_task", "ui_state_task"):
         await _cancel_task(app.get(key))
     for t in list(tabs.values()):
         await _cancel_task(t.receiver_task)

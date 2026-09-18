@@ -107,6 +107,7 @@ A rising line now draws itself in the browser tab.
 - **Remote-friendly.** Sender or plot host can bind. Live Bind /
   Connect buttons retarget without restart.
 - **Config lives with the data.** The sender declares plot layout.
+- **Sections and runtime state.** Optional collapsible sections, persistent status controls, and presentation updates that preserve streaming history. See the [section API](docs/sections.md) and [workflow example](examples/06_sections/README.md).
 - **Interactive controls.** Buttons, sliders, dials, displays — polled
   from your loop, no threads, no callbacks.
 - **LaTeX labels.** Use `$...$` or `\(...\)` in plot and control text;

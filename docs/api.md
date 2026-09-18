@@ -11,6 +11,7 @@ schema, the browser UI, and the `rtplot-server` CLI.
 
 - [Client API](#client-api)
 - [Plot configuration](#plot-configuration)
+- [Sections and runtime UI state](sections.md)
 - [Sending data](#sending-data)
 - [Interactive controls](#interactive-controls)
 - [Static HTML snapshots](#static-html-snapshots)
@@ -29,7 +30,8 @@ All from `rtplot.client`:
 | `local_plot()` | Point at `127.0.0.1:5555`. Shorthand for `configure_ip("127.0.0.1")`. |
 | `configure_ip(ip)` | Connect to `ip`, `host:port`, or `tcp://host:port`. Also connects the control socket to `port+1`. |
 | `configure_port(port)` | Rebind the publisher locally (bind-mode senders). |
-| `initialize_plots(desc)` | Declare layout (see [Plot configuration](#plot-configuration)). |
+| `initialize_plots(desc, *, view=None, ui_state=None)` | Declare layout, optional [sections and initial presentation state](sections.md). |
+| `set_ui_state(patch)` | Patch existing controls/sections; see [sections and state](sections.md). |
 | `send_array(A)` | Push samples: float, list, 1-D or 2-D `(num_traces, N)` numpy. |
 | `set_display(id, value)` | Update a `display` (numeric) or `text` (string) element. |
 | `poll_controls()` | Drain the return channel; returns `ControlState(values, buttons)`. |

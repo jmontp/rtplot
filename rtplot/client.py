@@ -1,6 +1,9 @@
 import zmq
 import numpy as np
 import time
+import uuid
+import warnings
+from .ui_state import META_KEY, declarations, merge_state
 from collections import OrderedDict, namedtuple
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Union
@@ -24,6 +27,7 @@ control_socket.setsockopt(zmq.RCVHWM, 1000)
 #Non-blocking local state for controls, drained on each poll_controls() call
 _control_values = {}
 _control_button_events = []
+_last_control_poll = time.monotonic()
 
 # Cached payload of the most recent initialize_plots() call. The server
 # uses this to recover from its own crashes: when its tab loses the
@@ -91,6 +95,16 @@ SENDING_PLOT_UPDATE = "0"
 SENDING_DATA = "1"
 SENDING_DISPLAY = "4"
 SENDING_TEXT_INPUT = "5"
+SENDING_UI_STATE = "6"
+_session = uuid.uuid4().hex
+_generation = 0
+_ui_revision = 0
+_ui_state = {"controls": {}, "sections": {}}
+_view = {}
+_control_registry = {}
+_server_capabilities = set()
+_source_epoch = None
+_last_ui_publish = 0.0
 
 #Lightweight result type returned by poll_controls()
 ControlState = namedtuple("ControlState", ["values", "buttons"])
@@ -147,6 +161,7 @@ class Plot:
     yrange: Optional[Tuple[float, float]] = None
     xrange: Optional[int] = None
     height: Optional[float] = None
+    section: Optional[str] = None
 
     def to_dict(self):
         return _drop_none({
@@ -161,6 +176,7 @@ class Plot:
             "yrange": _range_to_list(self.yrange),
             "xrange": self.xrange,
             "height": self.height,
+            "section": self.section,
         })
 
 
@@ -169,6 +185,7 @@ class PlotRow:
     """A group of plots with its own column count in the browser."""
     plots: List[Union[Plot, dict]]
     columns: int
+    section: Optional[str] = None
 
     def to_dict(self):
         if isinstance(self.columns, bool) or not isinstance(self.columns, int) or self.columns < 1:
@@ -183,7 +200,7 @@ class PlotRow:
                or any(k in p for k in ("plots", "controls", "non_plot_labels"))
                for p in plots):
             raise ValueError("PlotRow can contain only plot descriptions")
-        return {"columns": self.columns, "plots": plots}
+        return _drop_none({"columns": self.columns, "plots": plots, "section": self.section})
 
 
 @dataclass
@@ -294,11 +311,37 @@ class ControlsRow:
     """A row of control widgets, rendered in place of a plot."""
     controls: List[Union[Button, Slider, Dial, Display, Text, TextInput, dict]] = field(default_factory=list)
 
+    section: Optional[str] = None
+
     def to_dict(self):
-        return {"controls": [
+        return _drop_none({"controls": [
             c.to_dict() if hasattr(c, "to_dict") else c
             for c in self.controls
-        ]}
+        ], "section": self.section})
+
+
+@dataclass
+class Section:
+    id: str
+    title: str
+    description: str = ""
+    collapsible: bool = False
+    collapsed: bool = False
+    visible: bool = True
+
+    def to_dict(self):
+        return dict(vars(self))
+
+
+@dataclass
+class View:
+    sections: List[Union[Section, dict]]
+    persistent_section: Optional[str] = None
+
+    def to_dict(self):
+        return _drop_none({"sections": [s.to_dict() if hasattr(s, "to_dict") else s
+                                        for s in self.sections],
+                           "persistent_section": self.persistent_section})
 
 
 def local_plot():
@@ -448,6 +491,8 @@ def send_array(A, flags=0, copy=True, track=False):
         shape = A.shape,
     )
 
+    _publish_ui_if_due()
+
     #Send category
     socket.send_string(SENDING_DATA)
     #Send json description
@@ -456,7 +501,7 @@ def send_array(A, flags=0, copy=True, track=False):
     socket.send(A, flags, copy=copy, track=track)
 
 
-def initialize_plots(plot_descriptions=1, handshake_timeout=2.0):
+def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, ui_state=None):
     """Send a json description of desired plot and block until the
     server acknowledges it.
 
@@ -483,8 +528,15 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0):
         warning and return (so an old server without the handshake
         feature, or a server on a flaky network, doesn't block the
         caller forever). Set to 0 to skip the handshake entirely.
+    view:
+        Optional View or dictionary declaring sections and a persistent section.
+        Requires a browser server >= 0.5.0; unconfirmed support emits a warning.
+    ui_state:
+        Optional initial controls/sections presentation overrides. Subsequent
+        set_ui_state() patches preserve plots and values; None resets overrides.
     """
-    global plot_desc_dict
+    global plot_desc_dict, _generation, _ui_revision, _ui_state, _view
+    global _control_registry, _server_capabilities, _source_epoch, _control_button_events, _last_control_poll
 
     #Process int inputs
     if isinstance(plot_descriptions,int):
@@ -534,7 +586,19 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0):
     else:
         raise TypeError("Incorrect usage of initialize_plots, verify github for usage")
 
+    _view, _control_registry = declarations(plot_desc_dict, view)
+    _ui_state = merge_state({"controls": {}, "sections": {}}, ui_state or {}, _control_registry, _view)
+    _generation += 1
+    _ui_revision = 0
+    _source_epoch = None
+    _server_capabilities = set()
+    _control_button_events = []
+    _last_control_poll = time.monotonic()
     _send_initialize_with_handshake(plot_desc_dict, handshake_timeout)
+    if (view is not None or ui_state is not None) and "ui_state_v1" not in _server_capabilities:
+        warnings.warn("Sections/UI state require rtplot server >= 0.5.0. This server did not "
+                      "confirm support: layout may be flat and disabled states are NOT enforced.",
+                      RuntimeWarning, stacklevel=2)
 
 
 def _send_initialize_with_handshake(cfg, timeout):
@@ -549,7 +613,7 @@ def _send_initialize_with_handshake(cfg, timeout):
 
     def _send_once():
         socket.send_string(SENDING_PLOT_UPDATE)
-        socket.send_json(cfg)
+        socket.send_json(_wire_config(cfg))
 
     _send_once()
 
@@ -575,8 +639,9 @@ def _send_initialize_with_handshake(cfg, timeout):
                 continue
             evtype = event.get("type")
             if evtype == "config_ack":
-                return
-            elif evtype == "button":
+                if _accept_ack(event):
+                    return
+            elif evtype == "button" and _current_event(event):
                 _control_button_events.append(event.get("id"))
             elif evtype == "slider":
                 _control_values[event.get("id")] = float(event.get("value", 0.0))
@@ -595,6 +660,65 @@ def _send_initialize_with_handshake(cfg, timeout):
         " If you're on an older server (rtplot < 0.4.9) this warning is"
         " expected and harmless."
     )
+
+
+def _wire_config(cfg):
+    # Old servers already skip non_plot_labels entries. Metadata adds no traces.
+    return {**cfg, META_KEY: {"non_plot_labels": [], "rtplot": {
+        "session": _session, "generation": _generation, "view": _view,
+        "revision": _ui_revision, "state": _ui_state,
+    }}}
+
+
+def _accept_ack(event):
+    global _server_capabilities, _source_epoch, _control_button_events
+    if event.get("session") is not None and (event.get("session"), event.get("generation")) != (_session, _generation):
+        return False
+    _server_capabilities = set(event.get("capabilities", []))
+    epoch = event.get("source_epoch")
+    if epoch != _source_epoch:
+        _control_button_events = []
+    _source_epoch = epoch
+    return True
+
+
+def _current_event(event):
+    if "ui_state_v1" not in _server_capabilities:
+        return True
+    return (event.get("session"), event.get("generation"), event.get("source_epoch")) == (_session, _generation, _source_epoch)
+
+
+def _publish_ui_if_due(force=False):
+    global _last_ui_publish
+    if "ui_state_v1" not in _server_capabilities:
+        return
+    now = time.monotonic()
+    if not force and now - _last_ui_publish < 1.0:
+        return
+    socket.send_string(SENDING_UI_STATE, zmq.SNDMORE)
+    socket.send_json({"session": _session, "generation": _generation,
+                      "revision": _ui_revision, "state": _ui_state})
+    _last_ui_publish = now
+
+
+def set_ui_state(patch):
+    """Patch control/section presentation state without reinitializing plots.
+
+    None removes a property override (or all overrides for a target ID).
+    Returns whether the merged state changed. Call poll_controls regularly
+    while idle to maintain liveness and recover dropped presentation updates.
+    """
+    global _ui_state, _ui_revision
+    if "ui_state_v1" not in _server_capabilities:
+        raise RuntimeError("set_ui_state requires an acknowledged rtplot server >= 0.5.0; "
+                           "disabled-state enforcement is unavailable")
+    merged = merge_state(_ui_state, patch, _control_registry, _view)
+    changed = merged != _ui_state
+    if changed:
+        _ui_state = merged
+        _ui_revision += 1
+    _publish_ui_if_due(force=changed)
+    return changed
 
 
 def set_display(display_id: str, value):
@@ -646,7 +770,16 @@ def poll_controls():
     restarting their script. The request is consumed silently — the
     returned ControlState only ever contains control/button events.
     """
-    global _control_button_events
+    global _control_button_events, _source_epoch, _last_control_poll
+    now = time.monotonic()
+    stale_poll = "ui_state_v1" in _server_capabilities and now - _last_control_poll > 5.0
+    _last_control_poll = now
+    if stale_poll:
+        # An idle/disconnected application's PULL socket can still hold actions
+        # sent before the server detected the outage. Drain them without replay.
+        _control_button_events = []
+        _source_epoch = None
+    _publish_ui_if_due(force=stale_poll)
     while True:
         try:
             event = control_socket.recv_json(flags=zmq.NOBLOCK)
@@ -655,6 +788,13 @@ def poll_controls():
         except zmq.ZMQError:
             break
         evtype = event.get("type")
+        if stale_poll and evtype in ("config_ack", "button", "slider", "text"):
+            continue
+        if evtype == "config_ack":
+            _accept_ack(event)
+            continue
+        if evtype in ("button", "slider", "text") and not _current_event(event):
+            continue
         if evtype == "button":
             _control_button_events.append(event.get("id"))
         elif evtype == "slider":
@@ -664,7 +804,8 @@ def poll_controls():
         elif evtype == "resend_config":
             if plot_desc_dict is not None:
                 socket.send_string(SENDING_PLOT_UPDATE)
-                socket.send_json(plot_desc_dict)
+                _control_button_events = []
+                socket.send_json(_wire_config(plot_desc_dict))
                 # Surface a one-line confirmation so the user can see in
                 # their script log that the recovery handshake worked.
                 # If they never see this after clicking Reconnect, the

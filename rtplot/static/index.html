@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <title>rtplot</title>
 <link rel="stylesheet" href="/static/uPlot.min.css" />
+<link rel="stylesheet" href="/static/ui-view.css" />
 <link rel="stylesheet" href="/static/katex/katex.min.css" />
 <style>
   html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #fafafa; color: #222; }
@@ -199,6 +200,7 @@
   <div id="config-error-banner" class="config-error-banner" style="display:none"></div>
   <div id="plots" class="row"></div>
   <script src="/static/uPlot.iife.min.js"></script>
+  <script src="/static/ui-view.js"></script>
   <script src="/static/katex/katex.min.js"></script>
   <script src="/static/katex/auto-render.min.js"></script>
   <script>
@@ -377,7 +379,8 @@
           if (n && Number.isFinite(n) && n > 0 && n < p.xrange) {
             lo = p.xrange - n;
           }
-          try { p.uplot.setScale('x', { min: lo, max: hi }); } catch (e) {}
+          p.updating = true; p.keepScales = Boolean(n);
+          try { p.uplot.setScale('x', { min: lo, max: hi }); } finally { p.updating = false; }
         });
       }
       function syncMenuInputs() {
@@ -438,9 +441,15 @@
       let socket = null;
       let pendingFrame = false;
       let lastStatus = { fps: 0, statusByte: 0, nonPlot: 0, peers: 0, dirty: true };
+      let viewManager = null;
+      let activeLayout = null;
       const controlElements = { displays: {}, displayFormats: {}, displayKinds: {}, sliders: {}, textInputs: {} };
 
       function sendCtrl(msg) {
+        if (msg.type.startsWith('control_')) {
+          if (!viewManager || !viewManager.canInteract(msg.id)) return;
+          msg = {...msg, session: activeLayout?.session, generation: activeLayout?.generation};
+        }
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify(msg));
         }
@@ -504,6 +513,7 @@
           if (widget && widget.setValue) widget.setValue(value, !!fromDrag);
         };
         const commit = (v, fromDrag) => {
+          if (viewManager && !viewManager.canInteract(el.id)) return;
           applyLocal(v, fromDrag);
           sendCtrl({ type: 'control_slider', id: el.id, value: Number(value) });
         };
@@ -624,6 +634,7 @@
         drawIndicator();
 
         svg.addEventListener('pointerdown', (e) => {
+          if (svg.getAttribute('aria-disabled') === 'true') return;
           const startY = e.clientY;
           const startV = currentValue;
           svg.classList.add('ctrl-dial-dragging');
@@ -754,13 +765,14 @@
         }
       }
 
-      function buildControlRow(row) {
+      function buildControlRow(row, section) {
         const div = document.createElement('div');
         div.className = 'ctrl-row';
         row.forEach(el => {
           const item = buildControlElement(el);
           applyElementSize(item, el);
           div.appendChild(item);
+          viewManager.register(el.id, item, section);
         });
         return div;
       }
@@ -803,6 +815,9 @@
       }
 
       function destroyPlots() {
+        if (viewManager) viewManager.destroy();
+        viewManager = null;
+        activeLayout = null;
         plots.forEach(p => { try { p.uplot.destroy(); } catch (e) {} });
         plots = [];
         plotsDiv.innerHTML = '';
@@ -856,12 +871,13 @@
         wrap.className = 'plot-wrap';
         parent.appendChild(wrap);
 
+        let plotState = null;
         const opts = {
           width: Math.max(240, wrap.clientWidth - 16),
           height: plotHeight,
           title: pcfg.title || '',
           scales: {
-            x: { time: false, range: [0, xrange - 1] },
+            x: { time: false },
             y: pcfg.yrange ? { range: [pcfg.yrange[0], pcfg.yrange[1]] } : {},
           },
           axes: [
@@ -884,7 +900,9 @@
         for (let t = 0; t < traceCount; t++) initialData.push(buffers[t]);
 
         const u = new uPlot(opts, initialData, wrap);
-        plots.push({
+        plotState = {
+          dataDirty: false, keepScales: false, updating: false, forceKeepScales: false,
+          visible: wrap.getClientRects().length > 0,
           uplot: u,
           wrap: wrap,
           xs: xs,
@@ -893,58 +911,77 @@
           xrange: xrange,
           buffers: buffers,
           height: opts.height,
-        });
+        };
+        const setScale = u.setScale;
+        u.setScale = (key, range) => {
+          if (!plotState.updating) plotState.keepScales = true;
+          return setScale(key, range);
+        };
+        plots.push(plotState);
         return traceCount;
       }
 
+      let presentationFrame = null;
+      function refreshPresentation() {
+        if (presentationFrame !== null) return;
+        presentationFrame = requestAnimationFrame(() => {
+          presentationFrame = null;
+          plots.forEach(p => {
+            const visible = p.wrap.getClientRects().length > 0;
+            if (visible) {
+              const width = Math.max(240, p.wrap.clientWidth - 16);
+              if (!p.visible || Math.abs(p.uplot.width - width) > 1) {
+                p.uplot.setSize({width, height: p.height});
+                p.dataDirty = true; p.forceKeepScales = true;
+              }
+            }
+            p.visible = visible;
+          });
+          scheduleRender();
+        });
+      }
+
       function buildPlots(cfg) {
-        destroyPlots();
-        const columns = Number(cfg.columns) || (cfg.row_layout === false ? 2 : 1);
-        function newRow(count) {
-          const row = document.createElement('div');
-          row.className = 'plot-row';
-          row.style.setProperty('--plot-columns', Math.max(1, Math.floor(count)));
-          plotsDiv.appendChild(row);
-          return row;
+        if (cfg.session && activeLayout && activeLayout.tab === cfg.tab &&
+            activeLayout.session === cfg.session && activeLayout.generation === cfg.generation) {
+          viewManager.connection(true);
+          viewManager.source(cfg.source_available !== false, cfg.source_reason || '');
+          viewManager.apply(cfg.ui_state || {}, cfg.ui_revision ?? 0);
+          return;
         }
-
+        destroyPlots();
+        activeLayout = {tab: cfg.tab, session: cfg.session, generation: cfg.generation};
+        viewManager = new RtplotView(plotsDiv, cfg, refreshPresentation);
+        const columns = Number(cfg.columns) || (cfg.row_layout === false ? 2 : 1);
+        function newRow(count, parent) {
+          const row = document.createElement('div'); row.className = 'plot-row';
+          row.style.setProperty('--plot-columns', Math.max(1, Math.floor(count)));
+          parent.appendChild(row); return row;
+        }
+        // Trace offsets come ONLY from wire declaration order, never section/DOM order.
+        let offset = 0;
+        const offsets = cfg.plots.map(p => { const start = offset; offset += p.names.length; return start; });
+        totalTraces = offset;
         const controls = cfg.controls || [];
-        const layout = (cfg.layout && cfg.layout.length)
-          ? cfg.layout
-          : cfg.plots.map((_, idx) => ({ kind: 'plot', index: idx }))
-              .concat(controls.map((_, idx) => ({ kind: 'controls', index: idx })));
-
-        let traceOffset = 0;
-        let implicitRow = null;
+        const layout = cfg.layout?.length ? cfg.layout : cfg.plots.map((_, index) => ({kind:'plot', index}));
+        const implicitRows = new Map();
         layout.forEach(entry => {
+          const parent = viewManager.parent(entry.section);
           if (entry.kind === 'plot') {
-            const pcfg = cfg.plots[entry.index];
-            if (!pcfg) return;
-            if (!implicitRow) implicitRow = newRow(columns);
-            traceOffset += buildOnePlot(pcfg, columns === 1, traceOffset, implicitRow);
+            if (!implicitRows.has(parent)) implicitRows.set(parent, newRow(columns, parent));
+            buildOnePlot(cfg.plots[entry.index], columns === 1, offsets[entry.index], implicitRows.get(parent));
           } else if (entry.kind === 'row') {
-            implicitRow = null;
-            const row = newRow(entry.columns);
-            entry.plots.forEach(index => {
-              traceOffset += buildOnePlot(cfg.plots[index], entry.columns === 1, traceOffset, row);
-            });
+            implicitRows.delete(parent);
+            const row = newRow(entry.columns, parent);
+            entry.plots.forEach(index => buildOnePlot(cfg.plots[index], entry.columns === 1, offsets[index], row));
           } else if (entry.kind === 'controls') {
-            implicitRow = null;
-            const row = controls[entry.index];
-            if (!row) return;
-            plotsDiv.appendChild(buildControlRow(row));
+            implicitRows.delete(parent);
+            parent.appendChild(buildControlRow(controls[entry.index], entry.section));
           }
         });
-        totalTraces = traceOffset;
-        applySliderValues(cfg.slider_values);
-        applyTextValues(cfg.text_values);
-        applyDisplayValues(cfg.display_values);
-        // Render LaTeX in everything we just built: uPlot's title,
-        // x/y axis labels, and legend (all rendered as HTML), plus the
-        // control rows that were appended above.
-        renderLatexIn(plotsDiv);
-        applyVisibleSamples();
-        scheduleRender();
+        applySliderValues(cfg.slider_values); applyTextValues(cfg.text_values); applyDisplayValues(cfg.display_values);
+        viewManager.apply(cfg.ui_state || {}, cfg.ui_revision ?? 0);
+        renderLatexIn(plotsDiv); applyVisibleSamples(); refreshPresentation(); scheduleRender();
       }
 
       let renderFrameCount = 0;
@@ -964,9 +1001,12 @@
         }
         lastRenderTime = now;
         plots.forEach(p => {
+          if (!p.dataDirty || !p.wrap.getClientRects().length) return;
           const data = [p.xs];
           for (let t = 0; t < p.traceCount; t++) data.push(p.buffers[t]);
-          p.uplot.setData(data);
+          p.uplot.setData(data, !(p.keepScales || p.forceKeepScales));
+          p.forceKeepScales = false;
+          p.dataDirty = false;
         });
         if (lastStatus.dirty) {
           const peers = lastStatus.peers;
@@ -991,8 +1031,7 @@
             const now = performance.now();
             const wait = minInterval - (now - lastRenderTime);
             if (wait > 1) {
-              pendingFrame = false;
-              setTimeout(scheduleRender, wait);
+              setTimeout(_doRender, wait);
               return;
             }
           }
@@ -1047,6 +1086,7 @@
           return;
         }
 
+        plots.forEach(p => { p.dataDirty = true; });
         if (lastStatus.fps !== fps || lastStatus.statusByte !== status || lastStatus.nonPlot !== nonPlot) {
           lastStatus.fps = fps;
           lastStatus.statusByte = status;
@@ -1302,6 +1342,7 @@
         socket.onopen = () => { wsStatus.textContent = 'connected'; };
         socket.onclose = () => {
           wsStatus.textContent = 'disconnected, retrying...';
+          if (viewManager) viewManager.connection(false);
           setTimeout(connect, 1000);
         };
         socket.onerror = () => { wsStatus.textContent = 'error'; };
@@ -1324,7 +1365,7 @@
                 setZmqMode(t.mode, t.endpoint);
                 applyConfigErrorBanner();
                 sendCtrl({ type: 'tab_subscribe', id: activeTab });
-                showEmptyState('Loading tab \u2026');
+                if (!activeLayout || activeLayout.tab !== activeTab) showEmptyState('Loading tab \u2026');
               }
             } else if (msg.type === 'tab') {
               // Single-tab status or name update.
@@ -1334,6 +1375,7 @@
                 if (msg.tab.id === activeTab) {
                   setZmqMode(msg.tab.mode, msg.tab.endpoint);
                   applyConfigErrorBanner();
+                  if (viewManager) viewManager.source(msg.tab.source_available !== false, msg.tab.source_reason || '');
                 }
               }
             } else if (msg.type === 'tab_removed') {
@@ -1349,6 +1391,9 @@
             } else if (msg.type === 'config') {
               if (msg.tab && msg.tab !== activeTab) return;
               buildPlots(msg);
+            } else if (msg.type === 'ui_state') {
+              if (activeLayout && msg.tab === activeLayout.tab && msg.session === activeLayout.session &&
+                  msg.generation === activeLayout.generation) viewManager.apply(msg.state, msg.revision);
             } else if (msg.type === 'no_config') {
               if (msg.tab && msg.tab !== activeTab) return;
               const t = knownTabs[msg.tab];
@@ -1378,14 +1423,7 @@
         };
       }
 
-      window.addEventListener('resize', () => {
-        plots.forEach(p => {
-          p.uplot.setSize({
-            width: Math.max(240, p.wrap.clientWidth - 16),
-            height: p.height,
-          });
-        });
-      });
+      window.addEventListener('resize', refreshPresentation);
 
       connect();
     })();
