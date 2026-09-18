@@ -1,0 +1,42 @@
+[
+  {
+    "viewport": [
+      1440,
+      900
+    ],
+    "innerWidth": 1440,
+    "scrollWidth": 1440
+  },
+  {
+    "viewport": [
+      1024,
+      768
+    ],
+    "innerWidth": 1024,
+    "scrollWidth": 1024
+  },
+  {
+    "viewport": [
+      390,
+      844
+    ],
+    "innerWidth": 980,
+    "scrollWidth": 980
+  },
+  {
+    "viewport": [
+      320,
+      568
+    ],
+    "innerWidth": 980,
+    "scrollWidth": 980
+  },
+  {
+    "viewport": [
+      844,
+      390
+    ],
+    "innerWidth": 844,
+    "scrollWidth": 844
+  }
+]

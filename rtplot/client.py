@@ -3,7 +3,7 @@ import numpy as np
 import time
 import uuid
 import warnings
-from .ui_state import META_KEY, declarations, merge_state
+from .ui_state import META_KEY, declarations, merge_state, presentation_requested
 from collections import OrderedDict, namedtuple
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Union
@@ -162,6 +162,7 @@ class Plot:
     xrange: Optional[int] = None
     height: Optional[float] = None
     section: Optional[str] = None
+    min_height: Optional[int] = None
 
     def to_dict(self):
         return _drop_none({
@@ -176,7 +177,7 @@ class Plot:
             "yrange": _range_to_list(self.yrange),
             "xrange": self.xrange,
             "height": self.height,
-            "section": self.section,
+            "section": self.section, "min_height": self.min_height,
         })
 
 
@@ -209,11 +210,12 @@ class Button:
     label: str
     color: Optional[str] = None
     height: Optional[float] = None
+    appearance: Optional[str] = None
 
     def to_dict(self):
         return _drop_none({
             "type": "button", "id": self.id, "label": self.label,
-            "color": self.color, "height": self.height,
+            "color": self.color, "height": self.height, "appearance": self.appearance,
         })
 
 
@@ -267,11 +269,12 @@ class Display:
     label: str
     format: Optional[str] = None
     height: Optional[float] = None
+    appearance: Optional[str] = None
 
     def to_dict(self):
         return _drop_none({
             "type": "display", "id": self.id, "label": self.label,
-            "format": self.format, "height": self.height,
+            "format": self.format, "height": self.height, "appearance": self.appearance,
         })
 
 
@@ -281,11 +284,12 @@ class Text:
     label: str
     value: str = ""
     height: Optional[float] = None
+    appearance: Optional[str] = None
 
     def to_dict(self):
         return _drop_none({
             "type": "text", "id": self.id, "label": self.label,
-            "value": self.value, "height": self.height,
+            "value": self.value, "height": self.height, "appearance": self.appearance,
         })
 
 
@@ -312,12 +316,14 @@ class ControlsRow:
     controls: List[Union[Button, Slider, Dial, Display, Text, TextInput, dict]] = field(default_factory=list)
 
     section: Optional[str] = None
+    title: Optional[str] = None
+    exclusive: Optional[bool] = None
 
     def to_dict(self):
         return _drop_none({"controls": [
             c.to_dict() if hasattr(c, "to_dict") else c
             for c in self.controls
-        ], "section": self.section})
+        ], "section": self.section, "title": self.title, "exclusive": self.exclusive})
 
 
 @dataclass
@@ -328,6 +334,9 @@ class Section:
     collapsible: bool = False
     collapsed: bool = False
     visible: bool = True
+    navigation: str = "primary"
+    density: str = "normal"
+    show_heading: bool = True
 
     def to_dict(self):
         return dict(vars(self))
@@ -337,11 +346,12 @@ class Section:
 class View:
     sections: List[Union[Section, dict]]
     persistent_section: Optional[str] = None
+    essential_controls: Optional[List[str]] = None
 
     def to_dict(self):
         return _drop_none({"sections": [s.to_dict() if hasattr(s, "to_dict") else s
                                         for s in self.sections],
-                           "persistent_section": self.persistent_section})
+                           "persistent_section": self.persistent_section, "essential_controls": self.essential_controls})
 
 
 def local_plot():
@@ -598,6 +608,11 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, u
     if (view is not None or ui_state is not None) and "ui_state_v1" not in _server_capabilities:
         warnings.warn("Sections/UI state require rtplot server >= 0.5.0. This server did not "
                       "confirm support: layout may be flat and disabled states are NOT enforced.",
+                      RuntimeWarning, stacklevel=2)
+
+    if presentation_requested(plot_desc_dict, _view) and "presentation_v1" not in _server_capabilities:
+        warnings.warn("Presentation options require rtplot browser server >= 0.6.0. This server did not "
+                      "confirm support; essential placement, groups, and styling may be ignored.",
                       RuntimeWarning, stacklevel=2)
 
 

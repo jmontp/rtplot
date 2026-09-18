@@ -622,6 +622,8 @@ def control_allowed(tab, payload, kind):
     state = {**CONTROL_DEFAULTS, **tab.ui_state.get("controls", {}).get(cid, {})}
     if not state["enabled"] or not state["visible"]:
         return False
+    if cid in tab.view.get("essential_controls", []):
+        return True
     sid = info.get("section")
     section = next((s for s in tab.view.get("sections", []) if s["id"] == sid), {})
     return tab.ui_state.get("sections", {}).get(sid, {}).get("visible", section.get("visible", True))
@@ -649,7 +651,8 @@ def _expand_config(config):
                 plots.append((f"{key}/{i}", child))
             layout.append({"kind": "row", "columns": columns, "plots": indices, "section": entry.get("section")})
         elif "controls" in entry:
-            layout.append({"kind": "controls", "index": len(controls), "section": entry.get("section")})
+            layout.append({"kind": "controls", "index": len(controls), "section": entry.get("section"),
+                           "title": entry.get("title"), "exclusive": entry.get("exclusive", False)})
             controls.append(entry["controls"])
         else:
             layout.append({"kind": "plot", "index": len(plots), "section": entry.get("section")})
@@ -1574,6 +1577,7 @@ _INDEX_HTML = _read_static_asset("index.html")
 for _asset in (
     "ui-view.js",
     "ui-view.css",
+    "presentation.css",
     "uPlot.min.css",
     "uPlot.iife.min.js",
     "katex/katex.min.css",

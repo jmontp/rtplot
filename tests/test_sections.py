@@ -12,12 +12,12 @@ from test_communication import _ServerTest, REPO_ROOT
 
 
 class Publisher:
-    def __init__(self, port=None):
+    def __init__(self, port=None, script='section_publisher.py'):
         env = os.environ.copy()
         env['PYTHONPATH'] = REPO_ROOT
         self.messages = []
         self.serial = 0
-        self.proc = subprocess.Popen([sys.executable, '-u', str(Path(REPO_ROOT) / 'tests/section_publisher.py'),
+        self.proc = subprocess.Popen([sys.executable, '-u', str(Path(REPO_ROOT) / 'tests' / script),
                                       *([] if port is None else [str(port)])],
                                      cwd=REPO_ROOT, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, text=True)

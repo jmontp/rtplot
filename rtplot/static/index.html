@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>rtplot</title>
 <link rel="stylesheet" href="/static/uPlot.min.css" />
 <link rel="stylesheet" href="/static/ui-view.css" />
@@ -143,6 +144,7 @@
   .res-stats .rs-tab .rs-hz { color: #2a5db0; font-weight: 500; }
   .res-unavail { font-size: calc(11px * var(--ui-scale)); color: #999; font-style: italic; }
 </style>
+<link rel="stylesheet" href="/static/presentation.css" />
 </head>
 <body>
   <div id="tabbar"></div>
@@ -154,12 +156,13 @@
   </div>
   <div id="header">
     <h1>rtplot</h1>
-    <div id="status" class="green">Rate: -- Hz</div>
-    <div id="zmq-mode">ZMQ: --</div>
     <div id="ws-status">connecting...</div>
     <button id="menu-btn" class="btn" title="Settings" aria-label="Settings">&#9776;</button>
   </div>
   <div id="menu-panel" aria-hidden="true">
+    <h2>Connection and performance</h2>
+    <div id="status" class="green">Rate: -- Hz</div>
+    <div id="zmq-mode">ZMQ: --</div>
     <h2>Settings</h2>
     <div class="menu-row">
       <label for="menu-font">UI font scale</label>
@@ -391,12 +394,25 @@
       }
       menuBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        menuPanel.classList.toggle('open');
+        const open = menuPanel.classList.toggle('open');
+        const top = Math.max(document.getElementById('header').getBoundingClientRect().bottom,
+                             viewManager?.sticky.getBoundingClientRect().bottom || 0) + 8;
+        menuPanel.style.top = `${top}px`;
+        menuPanel.style.maxHeight = `calc(100dvh - ${top + 8}px)`;
+        menuPanel.setAttribute('aria-hidden', String(!open));
+        menuBtn.setAttribute('aria-expanded', String(open));
+      });
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && menuPanel.classList.contains('open')) {
+          menuPanel.classList.remove('open'); menuPanel.setAttribute('aria-hidden', 'true');
+          menuBtn.setAttribute('aria-expanded', 'false'); menuBtn.focus();
+        }
       });
       document.addEventListener('click', (e) => {
         if (!menuPanel.classList.contains('open')) return;
         if (menuPanel.contains(e.target) || menuBtn.contains(e.target)) return;
         menuPanel.classList.remove('open');
+        menuPanel.setAttribute('aria-hidden', 'true'); menuBtn.setAttribute('aria-expanded', 'false');
       });
       menuFontInput.addEventListener('input', () => {
         settings.fontScale = Number(menuFontInput.value);
@@ -445,14 +461,22 @@
       let activeLayout = null;
       const controlElements = { displays: {}, displayFormats: {}, displayKinds: {}, sliders: {}, textInputs: {} };
 
+      const presentationTargets = '.section-nav,.section-header,#header,#menu-panel,#tabbar,.uplot';
+      let presentationPointer = false;
+      document.addEventListener('pointerdown', e => {
+        presentationPointer = Boolean(e.target.closest(presentationTargets));
+        setTimeout(() => { presentationPointer = false; }, 0);
+      }, true);
       function sendCtrl(msg) {
         if (msg.type.startsWith('control_')) {
-          if (!viewManager || !viewManager.canInteract(msg.id)) return;
+          if (!viewManager || !viewManager.canInteract(msg.id)) return false;
           msg = {...msg, session: activeLayout?.session, generation: activeLayout?.generation};
         }
         if (socket && socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify(msg));
+          return true;
         }
+        return false;
       }
 
       function parseDisplayFormat(fmt) {
@@ -678,7 +702,7 @@
           const b = document.createElement('button');
           b.className = 'ctrl-btn';
           b.textContent = el.label || el.id;
-          if (el.color != null) {
+          if (el.color != null && (!el.appearance || el.appearance === 'default')) {
             const c = resolveColor(el.color);
             b.style.backgroundColor = c;
             b.style.borderColor = c;
@@ -735,9 +759,16 @@
           if (el.max_length !== undefined && Number.isFinite(Number(el.max_length))) {
             input.maxLength = Number(el.max_length);
           }
-          const commit = () => sendCtrl({ type: 'control_text', id: el.id, value: input.value });
-          input.addEventListener('change', commit);
-          input.addEventListener('blur', commit);
+          let committed = input.value;
+          const commit = () => {
+            if (input.value === committed) return;
+            if (sendCtrl({ type: 'control_text', id: el.id, value: input.value })) committed = input.value;
+          };
+          input.addEventListener('blur', e => {
+            // Moving into presentation UI must preserve a draft without sending it.
+            if (presentationPointer || e.relatedTarget?.closest(presentationTargets)) return;
+            commit();
+          });
           input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
@@ -765,12 +796,20 @@
         }
       }
 
-      function buildControlRow(row, section) {
+      function buildControlRow(row, section, options={}) {
         const div = document.createElement('div');
         div.className = 'ctrl-row';
+        if (options.title) {
+          const title = document.createElement('h3'); title.className = 'control-group-title'; title.textContent = options.title;
+          div.appendChild(title); div.setAttribute('role', 'group'); div.setAttribute('aria-label', options.title);
+        }
+        if (options.exclusive) div.classList.add('exclusive-group');
         row.forEach(el => {
           const item = buildControlElement(el);
           applyElementSize(item, el);
+          item.dataset.appearance = el.appearance || 'default';
+          if (el.appearance === 'state') item.setAttribute('role', 'status');
+          item.querySelectorAll('input,svg.ctrl-dial').forEach(input => input.setAttribute('aria-label', el.label || el.id));
           div.appendChild(item);
           viewManager.register(el.id, item, section);
         });
@@ -850,11 +889,11 @@
 
         const series = [{}];
         for (let t = 0; t < traceCount; t++) {
-          const dash = (styles[t] === '-') ? [10, 5] : null;
+          const dash = ({'-': [10, 5], dashed: [10, 5], dotted: [2, 4], dashdot: [10, 4, 2, 4]})[styles[t]] || null;
           series.push({
             label: pcfg.names[t],
-            stroke: resolveColor(colors[t]),
-            width: widths[t] || 1,
+            stroke: resolveColor(colors[t] || DEFAULT_COLORS[t % DEFAULT_COLORS.length]),
+            width: (Array.isArray(widths) ? widths[t] : widths) || 1,
             dash: dash || undefined,
             points: { show: false },
             spanGaps: true,
@@ -864,16 +903,15 @@
 
         const baseHeight = rowLayout ? 260 : 320;
         const heightMul = Number(pcfg.height);
-        const plotHeight = (Number.isFinite(heightMul) && heightMul > 0)
-          ? Math.round(baseHeight * heightMul)
-          : baseHeight;
+        const plotHeight = Math.max(pcfg.min_height || 160, (Number.isFinite(heightMul) && heightMul > 0)
+          ? Math.round(baseHeight * heightMul) : baseHeight);
         const wrap = document.createElement('div');
         wrap.className = 'plot-wrap';
         parent.appendChild(wrap);
 
         let plotState = null;
         const opts = {
-          width: Math.max(240, wrap.clientWidth - 16),
+          width: Math.max(120, wrap.clientWidth - 16),
           height: plotHeight,
           title: pcfg.title || '',
           scales: {
@@ -886,6 +924,14 @@
           ],
           series: series,
           legend: { show: true },
+          hooks: { ready: [u => u.root.querySelectorAll('.u-legend .u-series').forEach((tr, i) => {
+            if (!i) return;
+            if (traceCount === 1 && pcfg.title === pcfg.names[0]) tr.querySelector('.u-label').classList.add('sr-only');
+            tr.tabIndex = 0; tr.setAttribute('role', 'button'); tr.setAttribute('aria-pressed', String(u.series[i].show)); tr.setAttribute('aria-label', `Toggle ${pcfg.names[i-1]}`);
+            tr.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); tr.querySelector('.u-label').click(); } });
+          })], setSeries: [u => u.root.querySelectorAll('.u-legend .u-series').forEach((tr, i) => {
+            if (i) tr.setAttribute('aria-pressed', String(u.series[i].show));
+          })] },
           cursor: { drag: { x: false, y: false } },
         };
 
@@ -929,7 +975,7 @@
           plots.forEach(p => {
             const visible = p.wrap.getClientRects().length > 0;
             if (visible) {
-              const width = Math.max(240, p.wrap.clientWidth - 16);
+              const width = Math.max(120, p.wrap.clientWidth - 16);
               if (!p.visible || Math.abs(p.uplot.width - width) > 1) {
                 p.uplot.setSize({width, height: p.height});
                 p.dataDirty = true; p.forceKeepScales = true;
@@ -956,6 +1002,7 @@
         function newRow(count, parent) {
           const row = document.createElement('div'); row.className = 'plot-row';
           row.style.setProperty('--plot-columns', Math.max(1, Math.floor(count)));
+          row.style.setProperty('--compact-columns', Math.max(1, Math.min(2, Math.floor(count))));
           parent.appendChild(row); return row;
         }
         // Trace offsets come ONLY from wire declaration order, never section/DOM order.
@@ -976,9 +1023,10 @@
             entry.plots.forEach(index => buildOnePlot(cfg.plots[index], entry.columns === 1, offsets[index], row));
           } else if (entry.kind === 'controls') {
             implicitRows.delete(parent);
-            parent.appendChild(buildControlRow(controls[entry.index], entry.section));
+            parent.appendChild(buildControlRow(controls[entry.index], entry.section, entry));
           }
         });
+        viewManager.finish();
         applySliderValues(cfg.slider_values); applyTextValues(cfg.text_values); applyDisplayValues(cfg.display_values);
         viewManager.apply(cfg.ui_state || {}, cfg.ui_revision ?? 0);
         renderLatexIn(plotsDiv); applyVisibleSamples(); refreshPresentation(); scheduleRender();
@@ -1140,8 +1188,10 @@
 
           // Stacked labels: name on top, endpoint on a muted subline so
           // users can see at a glance which tab is wired to which device.
-          const labels = document.createElement('div');
-          labels.className = 'tab-labels';
+          const labels = document.createElement('button');
+          labels.className = 'tab-labels tab-select';
+          labels.setAttribute('aria-label', `View ${t.name || id}`);
+          labels.addEventListener('click', e => { e.stopPropagation(); if (id !== activeTab) switchTab(id); });
           const name = document.createElement('span');
           name.className = 'tab-name';
           name.textContent = t.name || id;
@@ -1154,10 +1204,10 @@
           labels.appendChild(ep);
           el.appendChild(labels);
 
-          const reconnect = document.createElement('span');
+          const reconnect = document.createElement('button');
           reconnect.className = 'tab-reconnect';
           reconnect.textContent = '\u21BB';
-          reconnect.title = 'Reconnect';
+          reconnect.title = 'Reconnect'; reconnect.setAttribute('aria-label', `Reconnect ${t.name || id}`);
           reconnect.addEventListener('click', (e) => {
             e.stopPropagation();
             sendCtrl({ type: 'tab_reconnect', id: id });
@@ -1171,17 +1221,17 @@
           el.appendChild(reconnect);
 
           if (id !== 'bind_me') {
-            const ren = document.createElement('span');
+            const ren = document.createElement('button');
             ren.className = 'tab-rename';
             ren.textContent = '\u270E';
-            ren.title = 'Rename';
+            ren.title = 'Rename'; ren.setAttribute('aria-label', `Rename ${t.name || id}`);
             ren.addEventListener('click', (e) => { e.stopPropagation(); beginRename(el, id, t.name); });
             el.appendChild(ren);
 
-            const close = document.createElement('span');
+            const close = document.createElement('button');
             close.className = 'tab-close';
             close.textContent = '\u00D7';
-            close.title = 'Close tab';
+            close.title = 'Close tab'; close.setAttribute('aria-label', `Close ${t.name || id}`);
             close.addEventListener('click', (e) => {
               e.stopPropagation();
               if (confirm(`Close tab "${t.name || id}"?`)) {
@@ -1216,6 +1266,7 @@
         add.className = 'tab-add';
         add.textContent = '+ new device';
         add.title = 'Add a tab that connects to a remote device';
+        add.setAttribute('aria-label', 'Add data source');
         add.addEventListener('click', openCreateForm);
         tabbar.appendChild(add);
 
@@ -1231,10 +1282,15 @@
         input.type = 'text';
         input.className = 'tab-name-input';
         input.value = currentName || '';
-        nameSpan.replaceWith(input);
+        const selector = nameSpan.closest('.tab-select');
+        const original = selector || nameSpan;
+        original.replaceWith(input);
         input.focus();
         input.select();
+        let finished = false;
         const commit = () => {
+          if (finished) return;
+          finished = true;
           const newName = input.value.trim();
           if (newName && newName !== currentName) {
             sendCtrl({ type: 'tab_rename', id: id, name: newName });
@@ -1243,14 +1299,16 @@
             const span = document.createElement('span');
             span.className = 'tab-name';
             span.textContent = currentName || '';
-            input.replaceWith(span);
+            if (selector) { nameSpan.textContent = currentName || ''; input.replaceWith(selector); } else input.replaceWith(span);
           }
         };
         const cancel = () => {
+          if (finished) return;
+          finished = true;
           const span = document.createElement('span');
           span.className = 'tab-name';
           span.textContent = currentName || '';
-          input.replaceWith(span);
+          if (selector) { nameSpan.textContent = currentName || ''; input.replaceWith(selector); } else input.replaceWith(span);
         };
         input.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') { e.preventDefault(); commit(); }
@@ -1339,13 +1397,13 @@
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         socket = new WebSocket(proto + '//' + location.host + '/ws');
         socket.binaryType = 'arraybuffer';
-        socket.onopen = () => { wsStatus.textContent = 'connected'; };
+        socket.onopen = () => { wsStatus.textContent = 'Server connected'; wsStatus.dataset.health = 'connected'; };
         socket.onclose = () => {
-          wsStatus.textContent = 'disconnected, retrying...';
+          wsStatus.textContent = 'Reconnecting…'; wsStatus.dataset.health = 'disconnected';
           if (viewManager) viewManager.connection(false);
           setTimeout(connect, 1000);
         };
-        socket.onerror = () => { wsStatus.textContent = 'error'; };
+        socket.onerror = () => { wsStatus.textContent = 'Connection error'; wsStatus.dataset.health = 'disconnected'; };
         socket.onmessage = (ev) => {
           if (typeof ev.data === 'string') {
             let msg;

@@ -864,7 +864,7 @@ class TestControlTextUI(_ServerTest):
                     self.assertIsNotNone(enter_event, "Enter did not send the text input value")
 
                     text_input.fill("walk_fast_02")
-                    page.locator("#status").click()
+                    page.locator(".ctrl-row").click(position={"x": 5, "y": 5})
 
                     blur_event = None
                     deadline = time.time() + 3.0

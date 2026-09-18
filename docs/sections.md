@@ -160,3 +160,6 @@ interactive section navigation and application controls belong to the live UI.
 
 For reproducible browser tests and measured rendering behavior, see
 [validation and performance checks](sections-validation.md).
+
+Version 0.6.0 adds [responsive presentation, essential controls, semantic styles,
+and labelled/exclusive groups](presentation.md), without changing the state API.

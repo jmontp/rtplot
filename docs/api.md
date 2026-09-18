@@ -12,6 +12,7 @@ schema, the browser UI, and the `rtplot-server` CLI.
 - [Client API](#client-api)
 - [Plot configuration](#plot-configuration)
 - [Sections and runtime UI state](sections.md)
+- [Responsive presentation and essential controls](presentation.md)
 - [Sending data](#sending-data)
 - [Interactive controls](#interactive-controls)
 - [Static HTML snapshots](#static-html-snapshots)

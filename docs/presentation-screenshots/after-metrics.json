@@ -1,0 +1,52 @@
+[
+  {
+    "viewport": [
+      1440,
+      900
+    ],
+    "innerWidth": 1440,
+    "scrollWidth": 1440,
+    "persistentHeight": 103,
+    "expandedScrollWidth": 1440
+  },
+  {
+    "viewport": [
+      1024,
+      768
+    ],
+    "innerWidth": 1024,
+    "scrollWidth": 1024,
+    "persistentHeight": 103,
+    "expandedScrollWidth": 1024
+  },
+  {
+    "viewport": [
+      390,
+      844
+    ],
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "persistentHeight": 103,
+    "expandedScrollWidth": 390
+  },
+  {
+    "viewport": [
+      320,
+      568
+    ],
+    "innerWidth": 320,
+    "scrollWidth": 320,
+    "persistentHeight": 103,
+    "expandedScrollWidth": 320
+  },
+  {
+    "viewport": [
+      844,
+      390
+    ],
+    "innerWidth": 844,
+    "scrollWidth": 844,
+    "persistentHeight": 95,
+    "expandedScrollWidth": 844
+  }
+]

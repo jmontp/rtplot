@@ -33,6 +33,8 @@ identical on-the-wire config.
 
 | [06 – Sections and live state](06_sections/) | Persistent status, collapsible sections, unavailable actions, and synthetic recovery. | [run.py](06_sections/run.py) | [run_typed.py](06_sections/run_typed.py) | Live UI |
 
+| [07 – Responsive presentation](07_presentation/) | Native phone layouts, essential actions, semantic styles, and choice groups. | [run.py](07_presentation/run.py) | [run_typed.py](07_presentation/run_typed.py) | [Before/after](../docs/presentation-screenshots/README.md) |
+
 ## How to run an example
 
 Each example script assumes a browser server is already running. Start
