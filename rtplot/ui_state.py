@@ -2,10 +2,33 @@
 from copy import deepcopy
 
 META_KEY = "__rtplot_view__"
-CAPABILITIES = ["sections", "ui_state_v1", "presentation_v1"]
+CAPABILITIES = ["sections", "ui_state_v1", "presentation_v1", "dropdown_v1"]
 CONTROL_DEFAULTS = {"enabled": True, "visible": True, "busy": False, "selected": False, "reason": ""}
 SECTION_DEFAULTS = {"visible": True, "status": "idle", "message": ""}
 STATUSES = {"idle", "ready", "busy", "complete", "warning", "error"}
+
+
+def dropdown_options(control):
+    """Return validated (value, label) choices; values are always strings."""
+    options = control.get("options")
+    if not isinstance(options, list) or not options:
+        raise ValueError("Dropdown options must be a non-empty list")
+    choices = []
+    for option in options:
+        if isinstance(option, str):
+            value, label = option, option
+        elif isinstance(option, dict):
+            value, label = option.get("value"), option.get("label", option.get("value"))
+        else:
+            raise ValueError("Dropdown options must be strings or value/label dictionaries")
+        if not isinstance(value, str) or not isinstance(label, str):
+            raise ValueError("Dropdown option values and labels must be strings")
+        if value in [v for v, _ in choices]:
+            raise ValueError("Dropdown option values must be unique")
+        choices.append((value, label))
+    if control.get("value", choices[0][0]) not in [v for v, _ in choices]:
+        raise ValueError("Dropdown value must match an option")
+    return choices
 
 
 def declarations(config, view=None):
@@ -78,6 +101,8 @@ def declarations(config, view=None):
             if row.get("exclusive") and control.get("type") != "button":
                 raise ValueError("Exclusive groups may contain only buttons")
             controls[cid] = {"type": control.get("type"), "section": sid}
+            if control.get("type") == "dropdown":
+                controls[cid]["options"] = [value for value, _ in dropdown_options(control)]
             if row.get("exclusive"):
                 controls[cid]["exclusive_group"] = key
     essentials = view.get("essential_controls", [])

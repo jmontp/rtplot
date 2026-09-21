@@ -166,3 +166,8 @@ body { height: auto; min-height: 100%; }
 .ctrl-textinput, .ctrl-numinput, .ctrl-nudgebtn { border-color: #738799; }
 
 @media (max-height: 480px) and (min-width: 640px) { .ui-source-status { padding-block: 2px; font-size: 12px; line-height: 1.2; } }
+
+/* Native choices retain platform keyboard and touch behavior. */
+.ctrl-dropdown { min-width: 0; flex: 1 1 180px; }
+.ctrl-dropdown > label { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; }
+.ctrl-select { flex: none; min-height: 44px; padding: 8px 12px; font: inherit; font-size: 16px; color: #18334b; background: #fff; border: 1px solid #738799; }

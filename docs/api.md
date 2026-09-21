@@ -15,6 +15,7 @@ schema, the browser UI, and the `rtplot-server` CLI.
 - [Responsive presentation and essential controls](presentation.md)
 - [Sending data](#sending-data)
 - [Interactive controls](#interactive-controls)
+- [Dropdown controls](dropdowns.md)
 - [Static HTML snapshots](#static-html-snapshots)
 - [Browser UI features](#browser-ui-features)
 - [CLI reference](#cli-reference)
@@ -34,6 +35,7 @@ All from `rtplot.client`:
 | `initialize_plots(desc, *, view=None, ui_state=None)` | Declare layout, optional [sections and initial presentation state](sections.md). |
 | `set_ui_state(patch)` | Patch existing controls/sections; see [sections and state](sections.md). |
 | `send_array(A)` | Push samples: float, list, 1-D or 2-D `(num_traces, N)` numpy. |
+| `set_dropdown(id, value)` | Select a declared dropdown option; see [dropdowns](dropdowns.md). |
 | `set_display(id, value)` | Update a `display` (numeric) or `text` (string) element. |
 | `poll_controls()` | Drain the return channel; returns `ControlState(values, buttons)`. |
 | `save_snapshot(path, server_url=None, animate=False)` | Download a self-contained HTML snapshot to `path`. |

@@ -676,8 +676,9 @@ def parse_config(tab: Tab, json_config):
         for element in row:
             if element.get("type") in ("slider", "dial") and "value" in element:
                 slider_values[element["id"]] = float(element["value"])
-            elif element.get("type") == "text_input":
-                text_values[element["id"]] = str(element.get("value", ""))
+            elif element.get("type") in ("text_input", "dropdown"):
+                default = registry[element["id"]]["options"][0] if element["type"] == "dropdown" else ""
+                text_values[element["id"]] = str(element.get("value", default))
 
     for plot_counter, (_, plot_description) in enumerate(plot_entries):
         trace_names = plot_description["names"]
@@ -717,10 +718,11 @@ def parse_config(tab: Tab, json_config):
         el["id"]
         for row in control_rows
         for el in row
-        if el.get("type") == "text_input"
+        if el.get("type") in ("text_input", "dropdown")
     }
     tab.text_values = {
-        text_id: tab.text_values.get(text_id, default_value)
+        text_id: (default_value if registry[text_id]["type"] == "dropdown"
+                  else tab.text_values.get(text_id, default_value))
         for text_id, default_value in text_values.items()
         if text_id in active_text_ids
     }
@@ -1264,6 +1266,12 @@ async def zmq_receiver(tab: Tab):
             if text_id is None:
                 continue
             value = str(payload.get("value", ""))
+            control = tab.control_registry.get(text_id, {})
+            if control.get("type") == "dropdown":
+                if (payload.get("session"), payload.get("generation")) != (tab.session, tab.generation):
+                    continue
+                if payload.get("value") not in control["options"]:
+                    continue
             if tab.text_values.get(text_id) != value:
                 tab.text_values[text_id] = value
                 tab.text_dirty.add(text_id)
@@ -1701,8 +1709,13 @@ async def handle_ws(request):
                     text_id = payload.get("id")
                     tid = ws_tab.get(ws, BIND_ME_ID)
                     t = tabs.get(tid)
-                    if text_id and t is not None and control_allowed(t, payload, {"text_input"}):
+                    if text_id and t is not None and control_allowed(t, payload, {"text_input", "dropdown"}):
                         value = str(payload.get("value", ""))
+                        control = t.control_registry.get(text_id, {})
+                        if control.get("type") == "dropdown":
+                            if payload.get("value") not in control["options"]:
+                                continue
+                            t.text_dirty.add(text_id)
                         t.text_values[text_id] = value
                         refresh_config_message(t)
                         await send_control_event(

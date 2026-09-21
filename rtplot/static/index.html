@@ -742,6 +742,28 @@
           item.appendChild(val);
           controlElements.displays[el.id] = val;
           controlElements.displayKinds[el.id] = 'text';
+        } else if (el.type === 'dropdown') {
+          item.classList.add('ctrl-dropdown', 'flex');
+          const label = document.createElement('label');
+          label.textContent = el.label || el.id;
+          const select = document.createElement('select');
+          select.className = 'ctrl-textinput ctrl-select';
+          for (const choice of el.options) {
+            const option = document.createElement('option');
+            option.value = typeof choice === 'string' ? choice : choice.value;
+            option.textContent = typeof choice === 'string' ? choice : (choice.label ?? choice.value);
+            select.appendChild(option);
+          }
+          select.value = el.value ?? select.options[0].value;
+          let committed = select.value;
+          select.addEventListener('change', () => {
+            if (sendCtrl({type: 'control_text', id: el.id, value: select.value})) committed = select.value;
+            else select.value = committed;
+          });
+          select.setServerValue = value => { select.value = value; committed = value; };
+          label.appendChild(select);
+          item.appendChild(label);
+          controlElements.textInputs[el.id] = select;
         } else if (el.type === 'text_input') {
           item.classList.add('ctrl-text-input', 'flex');
           if (el.label) {
@@ -809,7 +831,7 @@
           applyElementSize(item, el);
           item.dataset.appearance = el.appearance || 'default';
           if (el.appearance === 'state') item.setAttribute('role', 'status');
-          item.querySelectorAll('input,svg.ctrl-dial').forEach(input => input.setAttribute('aria-label', el.label || el.id));
+          item.querySelectorAll('input,select,svg.ctrl-dial').forEach(input => input.setAttribute('aria-label', el.label || el.id));
           div.appendChild(item);
           viewManager.register(el.id, item, section);
         });
@@ -828,7 +850,8 @@
         if (!values) return;
         for (const [id, val] of Object.entries(values)) {
           const input = controlElements.textInputs[id];
-          if (input) input.value = (val !== undefined && val !== null) ? String(val) : '';
+          if (input?.setServerValue) input.setServerValue(String(val));
+          else if (input) input.value = (val !== undefined && val !== null) ? String(val) : '';
         }
       }
 

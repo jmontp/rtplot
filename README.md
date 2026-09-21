@@ -133,3 +133,5 @@ A rising line now draws itself in the browser tab.
 
 Issues and feature requests:
 [github.com/jmontp/rtplot/issues](https://github.com/jmontp/rtplot/issues).
+
+Dropdown controls: [API and examples](docs/dropdowns.md).

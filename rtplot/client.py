@@ -311,9 +311,23 @@ class TextInput:
 
 
 @dataclass
+class Dropdown:
+    """Single choice control. Omitted value selects the first option."""
+    id: str
+    label: str
+    options: List[Union[str, dict]]
+    value: Optional[str] = None
+    height: Optional[float] = None
+
+    def to_dict(self):
+        return _drop_none({"type": "dropdown", "id": self.id, "label": self.label,
+                           "options": self.options, "value": self.value, "height": self.height})
+
+
+@dataclass
 class ControlsRow:
     """A row of control widgets, rendered in place of a plot."""
-    controls: List[Union[Button, Slider, Dial, Display, Text, TextInput, dict]] = field(default_factory=list)
+    controls: List[Union[Button, Slider, Dial, Display, Text, TextInput, Dropdown, dict]] = field(default_factory=list)
 
     section: Optional[str] = None
     title: Optional[str] = None
@@ -610,6 +624,10 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, u
                       "confirm support: layout may be flat and disabled states are NOT enforced.",
                       RuntimeWarning, stacklevel=2)
 
+    if any(c["type"] == "dropdown" for c in _control_registry.values()) and "dropdown_v1" not in _server_capabilities:
+        warnings.warn("Dropdowns require rtplot browser server >= 0.7.0. This server did not "
+                      "confirm support; dropdown controls may be missing or unenforced.",
+                      RuntimeWarning, stacklevel=2)
     if presentation_requested(plot_desc_dict, _view) and "presentation_v1" not in _server_capabilities:
         warnings.warn("Presentation options require rtplot browser server >= 0.6.0. This server did not "
                       "confirm support; essential placement, groups, and styling may be ignored.",
@@ -767,12 +785,23 @@ def set_text_input(input_id: str, value):
     socket.send_json({"id": str(input_id), "value": str(value)})
 
 
+def set_dropdown(control_id: str, value: str):
+    """Select a declared option without rebuilding the layout (server >= 0.7.0)."""
+    control = _control_registry.get(control_id, {})
+    if control.get("type") != "dropdown" or value not in control["options"]:
+        raise ValueError("set_dropdown requires a dropdown ID and a declared string value")
+    if "dropdown_v1" not in _server_capabilities:
+        raise RuntimeError("set_dropdown requires rtplot browser server >= 0.7.0")
+    socket.send_string(SENDING_TEXT_INPUT, zmq.SNDMORE)
+    socket.send_json({"id": control_id, "value": value, "session": _session, "generation": _generation})
+
+
 def poll_controls():
     """Drain the return channel non-blocking and return current control state.
 
     Returns a ControlState(values, buttons) where:
       - values: dict of latest control values keyed by id. Sliders/dials
-        remain floats; text_input controls remain strings.
+        remain floats; text_input and dropdown controls remain strings.
       - buttons: list of button ids that fired since the previous poll
         (cleared after this call).
 
