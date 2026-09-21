@@ -625,7 +625,7 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, u
                       RuntimeWarning, stacklevel=2)
 
     if any(c["type"] == "dropdown" for c in _control_registry.values()) and "dropdown_v1" not in _server_capabilities:
-        warnings.warn("Dropdowns require rtplot browser server >= 0.7.0. This server did not "
+        warnings.warn("Dropdowns require rtplot browser server >= 0.6.1. This server did not "
                       "confirm support; dropdown controls may be missing or unenforced.",
                       RuntimeWarning, stacklevel=2)
     if presentation_requested(plot_desc_dict, _view) and "presentation_v1" not in _server_capabilities:
@@ -786,12 +786,12 @@ def set_text_input(input_id: str, value):
 
 
 def set_dropdown(control_id: str, value: str):
-    """Select a declared option without rebuilding the layout (server >= 0.7.0)."""
+    """Select a declared option without rebuilding the layout (server >= 0.6.1)."""
     control = _control_registry.get(control_id, {})
     if control.get("type") != "dropdown" or value not in control["options"]:
         raise ValueError("set_dropdown requires a dropdown ID and a declared string value")
     if "dropdown_v1" not in _server_capabilities:
-        raise RuntimeError("set_dropdown requires rtplot browser server >= 0.7.0")
+        raise RuntimeError("set_dropdown requires rtplot browser server >= 0.6.1")
     socket.send_string(SENDING_TEXT_INPUT, zmq.SNDMORE)
     socket.send_json({"id": control_id, "value": value, "session": _session, "generation": _generation})
 

@@ -1,6 +1,6 @@
 # Dropdown controls
 
-Requires **better-rtplot 0.7.0 or later on both client and browser server**.
+Requires **better-rtplot 0.6.1 or later on both client and browser server**.
 Older servers trigger a compatibility warning; dropdown support and disabled-state
 handling must not be assumed when support is unconfirmed. The Qt server does not
 support browser controls.
