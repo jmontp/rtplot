@@ -23,6 +23,18 @@
       this.essentials.setAttribute('role', 'group'); this.essentials.setAttribute('aria-label', 'Essential actions and state');
       this.sticky.appendChild(this.essentials);
       this.overflow = document.createElement('div'); this.overflow.className = 'persistent-overflow'; this.sticky.appendChild(this.overflow);
+      // Pin the whole chrome as one unit for essential-action views. Separate
+      // sticky rows let the tab bar and plot padding scroll away first, moving
+      // the action before it reaches its sticky threshold.
+      this.chrome = null;
+      if (this.essentialIds.size) {
+        this.chromeNodes = ['tabbar', 'tab-create', 'header'].map(id => document.getElementById(id));
+        this.chrome = document.createElement('div'); this.chrome.className = 'essential-chrome';
+        this.chromeNodes[0].before(this.chrome);
+        this.chrome.append(...this.chromeNodes, this.sticky);
+        // Connection messages must not displace the operator's stop target.
+        this.essentials.after(this.banner);
+      }
       const view = cfg.view || {};
       (view.sections || []).forEach((s, index) => {
         const node = document.createElement('section'); node.className = 'view-section'; node.dataset.section = s.id;
@@ -69,9 +81,11 @@
       this.refreshAvailability();
       this.observer = new ResizeObserver(() => this.offsets());
       this.observer.observe(this.sticky); this.observer.observe(document.getElementById('header'));
+      if (this.chrome) this.observer.observe(this.chrome);
       this.onFocus = e => {
         if (!root.contains(e.target) || this.sticky.contains(e.target)) return;
-        const top = document.getElementById('header').getBoundingClientRect().bottom + this.sticky.getBoundingClientRect().height;
+        const top = this.chrome ? this.chrome.getBoundingClientRect().bottom :
+          document.getElementById('header').getBoundingClientRect().bottom + this.sticky.getBoundingClientRect().height;
         if (e.target.getBoundingClientRect().top < top) e.target.scrollIntoView({block: 'center'});
       };
       root.addEventListener('focusin', this.onFocus);
@@ -88,8 +102,9 @@
     }
     offsets() {
       const header = document.getElementById('header').getBoundingClientRect().height;
-      this.sticky.style.top = `${header}px`;
-      const margin = header + this.sticky.getBoundingClientRect().height + 12;
+      this.sticky.style.top = this.chrome ? '' : `${header}px`;
+      const margin = (this.chrome ? this.chrome.getBoundingClientRect().height :
+        header + this.sticky.getBoundingClientRect().height) + 12;
       document.documentElement.style.setProperty('--presentation-offset', `${margin}px`);
       this.sticky.style.setProperty('--source-height', `${this.banner.getBoundingClientRect().height}px`);
       this.sticky.style.setProperty('--essential-height', `${this.essentials.getBoundingClientRect().height}px`);
@@ -174,7 +189,10 @@
       this.available = available; this.reason = reason; this.refreshAvailability();
     }
     connection(connected) { this.connected = connected; this.refreshAvailability(); }
-    destroy() { this.observer.disconnect(); this.root.removeEventListener('focusin', this.onFocus); }
+    destroy() {
+      this.observer.disconnect(); this.root.removeEventListener('focusin', this.onFocus);
+      if (this.chrome) this.chrome.replaceWith(...this.chromeNodes);
+    }
   }
   window.RtplotView = RtplotView;
 })();

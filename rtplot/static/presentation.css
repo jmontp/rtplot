@@ -171,3 +171,10 @@ body { height: auto; min-height: 100%; }
 .ctrl-dropdown { min-width: 0; flex: 1 1 180px; }
 .ctrl-dropdown > label { display: flex; flex-direction: column; gap: 6px; width: 100%; min-width: 0; }
 .ctrl-select { flex: none; min-height: 44px; padding: 8px 12px; font: inherit; font-size: 16px; color: #18334b; background: #fff; border: 1px solid #738799; }
+
+/* Essential actions share one sticky containing block with the source tabs
+   and header, so scrolling cannot move their initial screen position. */
+.essential-chrome { position: sticky; top: 0; z-index: 10; background: #f4f6f8; }
+.essential-chrome #header, .essential-chrome .ui-sticky { position: static; }
+.essential-chrome .ui-sticky { padding-inline: 12px; }
+@media (max-width: 639px) { .essential-chrome .ui-sticky { padding-inline: 8px; } }

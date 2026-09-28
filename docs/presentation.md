@@ -31,6 +31,12 @@ internally scrolling panels. They retain declaration order, IDs, values, and
 event payloads; the list designates membership rather than a new order.
 Resizing never reparents or duplicates them.
 
+For views with essential controls, source tabs, the header, and the essential
+strip share one sticky container. Essential actions retain their screen position
+while scrolling or expanding optional sections. Connection messages appear
+below the essential actions, so a status change does not move the stop target.
+Views without essential controls retain the existing header behavior.
+
 Essentials remain available when their original section collapses or becomes
 hidden. Their own `visible` and `enabled` overrides, source availability, and
 disabled reasons still apply. This rule is also enforced by the server. The
