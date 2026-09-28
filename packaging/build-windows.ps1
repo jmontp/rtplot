@@ -41,5 +41,7 @@ try {
         built_utc = (Get-Date).ToUniversalTime().ToString('o')
     }
     $receipt | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $dist 'build-provenance.json')
+    & $buildPython (Join-Path $PSScriptRoot 'verify-windows-build.py')
+    if ($LASTEXITCODE -ne 0) { throw 'Packaged source verification failed' }
     Write-Host "Built committed source $commit -> $exe"
 } finally { Pop-Location }

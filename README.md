@@ -27,6 +27,9 @@ flowchart TD
 Sender and server don't have to be on the same machine — see the
 [networking guide](docs/networking.md).
 
+`main` is the maintained development branch. For a local server build and stable
+launcher in this checkout, see [Building from source](packaging/README.md).
+
 ---
 
 ## Install

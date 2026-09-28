@@ -17,6 +17,8 @@ Pass `-Python C:\path\to\python.exe` to select the interpreter when building.
 The script builds **committed HEAD**, creates an isolated environment under
 `.build/windows/`, and writes `dist/rtplot-server.exe` plus
 `dist/build-provenance.json` with the commit, executable hash, and dependencies.
+It also checks packaged Python modules and browser assets against that source,
+runs `--help` without starting a listener, and saves `dist/build-verification.json`.
 Uncommitted changes must be committed before they appear in the executable.
 Build caches and executable extraction stay under `.build/` on the repository's
 drive. These generated files are not committed.
