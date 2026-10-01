@@ -3,7 +3,9 @@ import numpy as np
 import time
 import uuid
 import warnings
+import json
 from .ui_state import META_KEY, declarations, merge_state, presentation_requested
+from .xy import SENDING_XY, xy_declarations, normalize_xy
 from collections import OrderedDict, namedtuple
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Union
@@ -105,6 +107,7 @@ _control_registry = {}
 _server_capabilities = set()
 _source_epoch = None
 _last_ui_publish = 0.0
+_xy_plots = {}
 
 #Lightweight result type returned by poll_controls()
 ControlState = namedtuple("ControlState", ["values", "buttons"])
@@ -163,6 +166,9 @@ class Plot:
     height: Optional[float] = None
     section: Optional[str] = None
     min_height: Optional[int] = None
+    id: Optional[str] = None
+    mode: Optional[str] = None
+    xscale: Optional[str] = None
 
     def to_dict(self):
         return _drop_none({
@@ -178,6 +184,7 @@ class Plot:
             "xrange": self.xrange,
             "height": self.height,
             "section": self.section, "min_height": self.min_height,
+            "id": self.id, "mode": self.mode, "xscale": self.xscale,
         })
 
 
@@ -495,6 +502,9 @@ def configure_ip(ip = None, known_pi_address = False, new_bind_address = None):
 
 def send_array(A, flags=0, copy=True, track=False):
     """send a numpy array with metadata
+
+    In mixed layouts, include only scrolling traces in declaration order.
+    X/Y plots update separately through send_xy().
     Inputs
     ------
     A: (subplots,dim) np array to transmit
@@ -525,6 +535,25 @@ def send_array(A, flags=0, copy=True, track=False):
     socket.send(A, flags, copy=copy, track=track)
 
 
+def send_xy(plot_id, x, y):
+    """Replace an X/Y plot with shared increasing X and Y shaped (traces, N).
+
+    A single trace also accepts one-dimensional Y. Matching empty arrays clear
+    the plot. Logarithmic X requires positive coordinates. Values must be finite;
+    compute FFT magnitudes, normalization and any dB conversion in the sender.
+    Requires a browser server advertising ``xy_v1`` during initialize_plots().
+    """
+    if plot_id not in _xy_plots:
+        raise ValueError(f"Unknown X/Y plot ID: {plot_id!r}")
+    if "xy_v1" not in _server_capabilities:
+        raise RuntimeError("X/Y plots require a browser server supporting xy_v1; update the server")
+    x, y = normalize_xy(x, y, _xy_plots[plot_id])
+    meta = {"id": plot_id, "session": _session, "generation": _generation,
+            "num_samples": x.size, "num_traces": y.shape[0]}
+    _publish_ui_if_due()
+    socket.send_multipart([SENDING_XY.encode(), json.dumps(meta).encode(), x.tobytes(), y.tobytes()])
+
+
 def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, ui_state=None):
     """Send a json description of desired plot and block until the
     server acknowledges it.
@@ -552,6 +581,8 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, u
         warning and return (so an old server without the handshake
         feature, or a server on a flaky network, doesn't block the
         caller forever). Set to 0 to skip the handshake entirely.
+        X/Y layouts require a confirmed xy_v1 capability and raise RuntimeError
+        on timeout, an unsupported server, or a skipped handshake.
     view:
         Optional View or dictionary declaring sections and a persistent section.
         Requires a browser server >= 0.5.0; unconfirmed support emits a warning.
@@ -559,7 +590,7 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, u
         Optional initial controls/sections presentation overrides. Subsequent
         set_ui_state() patches preserve plots and values; None resets overrides.
     """
-    global plot_desc_dict, _generation, _ui_revision, _ui_state, _view
+    global plot_desc_dict, _generation, _ui_revision, _ui_state, _view, _xy_plots
     global _control_registry, _server_capabilities, _source_epoch, _control_button_events, _last_control_poll
 
     #Process int inputs
@@ -610,6 +641,7 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, u
     else:
         raise TypeError("Incorrect usage of initialize_plots, verify github for usage")
 
+    _xy_plots = xy_declarations(plot_desc_dict)
     _view, _control_registry = declarations(plot_desc_dict, view)
     _ui_state = merge_state({"controls": {}, "sections": {}}, ui_state or {}, _control_registry, _view)
     _generation += 1
@@ -619,6 +651,9 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, u
     _control_button_events = []
     _last_control_poll = time.monotonic()
     _send_initialize_with_handshake(plot_desc_dict, handshake_timeout)
+    if _xy_plots and "xy_v1" not in _server_capabilities:
+        raise RuntimeError("X/Y plots require a browser server supporting xy_v1 and a successful "
+                           "configuration handshake; update the server or check the connection")
     if (view is not None or ui_state is not None) and "ui_state_v1" not in _server_capabilities:
         warnings.warn("Sections/UI state require rtplot server >= 0.5.0. This server did not "
                       "confirm support: layout may be flat and disabled states are NOT enforced.",

@@ -378,6 +378,7 @@
       function applyVisibleSamples() {
         const n = settings.visibleSamples;
         plots.forEach(p => {
+          if (p.mode === 'xy') return;
           let lo = 0, hi = p.xrange - 1;
           if (n && Number.isFinite(n) && n > 0 && n < p.xrange) {
             lo = p.xrange - n;
@@ -443,6 +444,7 @@
       const HEADER_SIZE = 16;
       const MSG_SNAPSHOT = 0;
       const MSG_DELTA = 1;
+      const MSG_XY = 2;
 
       // ---- Tab state ----
       // knownTabs: full server-reported tab list, keyed by id.
@@ -900,7 +902,8 @@
       }
 
       function buildOnePlot(pcfg, rowLayout, traceOffset, parent) {
-        const xrange = pcfg.xrange || 200;
+        const mode = pcfg.mode || 'stream';
+        const xrange = mode === 'xy' ? 0 : (pcfg.xrange || 200);
         const xs = new Float64Array(xrange);
         for (let i = 0; i < xrange; i++) xs[i] = i;
 
@@ -938,7 +941,7 @@
           height: plotHeight,
           title: pcfg.title || '',
           scales: {
-            x: { time: false },
+            x: { time: false, distr: pcfg.xscale === 'log' ? 3 : 1 },
             y: pcfg.yrange ? { range: [pcfg.yrange[0], pcfg.yrange[1]] } : {},
           },
           axes: [
@@ -974,6 +977,8 @@
           visible: wrap.getClientRects().length > 0,
           uplot: u,
           wrap: wrap,
+          mode: mode,
+          id: pcfg.id,
           xs: xs,
           traceCount: traceCount,
           startIdx: traceOffset,
@@ -1001,7 +1006,7 @@
               const width = Math.max(120, p.wrap.clientWidth - 16);
               if (!p.visible || Math.abs(p.uplot.width - width) > 1) {
                 p.uplot.setSize({width, height: p.height});
-                p.dataDirty = true; p.forceKeepScales = true;
+                p.dataDirty = true; p.forceKeepScales = p.mode !== 'xy';
               }
             }
             p.visible = visible;
@@ -1030,7 +1035,11 @@
         }
         // Trace offsets come ONLY from wire declaration order, never section/DOM order.
         let offset = 0;
-        const offsets = cfg.plots.map(p => { const start = offset; offset += p.names.length; return start; });
+        const offsets = cfg.plots.map(p => {
+          const start = offset;
+          if (p.mode !== 'xy') offset += p.names.length;
+          return start;
+        });
         totalTraces = offset;
         const controls = cfg.controls || [];
         const layout = cfg.layout?.length ? cfg.layout : cfg.plots.map((_, index) => ({kind:'plot', index}));
@@ -1110,21 +1119,52 @@
         });
       }
 
+      function applyXY(buf) {
+        // Type 2 has length-prefixed JSON, then aligned float64 X / float32 Y.
+        if (!activeLayout || buf.byteLength < 8) return;
+        const view = new DataView(buf);
+        const jsonLength = view.getUint32(4, true);
+        const offset = 8 + Math.ceil(jsonLength / 8) * 8;
+        if (offset > buf.byteLength) return;
+        let meta;
+        try { meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, jsonLength))); }
+        catch (_) { return; }
+        if (!meta || meta.tab !== activeTab || meta.session !== activeLayout.session ||
+            meta.generation !== activeLayout.generation) return;
+        const p = plots.find(p => p.mode === 'xy' && p.id === meta.id);
+        const n = meta.num_samples;
+        if (!p || meta.num_traces !== p.traceCount || !Number.isSafeInteger(n) || n < 0 ||
+            buf.byteLength !== offset + n * 8 + p.traceCount * n * 4) return;
+        p.xs = new Float64Array(buf, offset, n);
+        p.buffers = Array.from({length: p.traceCount}, (_, t) =>
+          new Float32Array(buf, offset + n * 8 + t * n * 4, n));
+        p.dataDirty = true;
+        lastStatus.fps = meta.fps || 0;
+        lastStatus.statusByte = meta.status || 0;
+        lastStatus.dirty = true;
+        scheduleRender();
+      }
+
       function applyBinary(buf) {
         if (!plots.length) return;
+        if (buf.byteLength < 1) return;
         const view = new DataView(buf);
         const msgType = view.getUint8(0);
+        if (msgType === MSG_XY) { applyXY(buf); return; }
+        if (buf.byteLength < HEADER_SIZE) return;
         const status = view.getUint8(1);
         const nonPlot = view.getUint8(2);
         const numTraces = view.getUint32(4, true);
         const numSamples = view.getUint32(8, true);
         const fps = view.getFloat32(12, true);
-        if (numTraces !== totalTraces || numSamples === 0) return;
+        if (numTraces !== totalTraces || numSamples === 0 ||
+            buf.byteLength !== HEADER_SIZE + numTraces * numSamples * 4) return;
 
         const data = new Float32Array(buf, HEADER_SIZE, numTraces * numSamples);
 
         if (msgType === MSG_SNAPSHOT) {
           plots.forEach(p => {
+            if (p.mode === 'xy') return;
             for (let t = 0; t < p.traceCount; t++) {
               const traceRow = p.startIdx + t;
               const offset = traceRow * numSamples;
@@ -1140,6 +1180,7 @@
         } else if (msgType === MSG_DELTA) {
           const n = numSamples;
           plots.forEach(p => {
+            if (p.mode === 'xy') return;
             for (let t = 0; t < p.traceCount; t++) {
               const traceRow = p.startIdx + t;
               const buf32 = p.buffers[t];
@@ -1157,7 +1198,7 @@
           return;
         }
 
-        plots.forEach(p => { p.dataDirty = true; });
+        plots.forEach(p => { if (p.mode !== 'xy') p.dataDirty = true; });
         if (lastStatus.fps !== fps || lastStatus.statusByte !== status || lastStatus.nonPlot !== nonPlot) {
           lastStatus.fps = fps;
           lastStatus.statusByte = status;

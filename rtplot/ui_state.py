@@ -2,7 +2,7 @@
 from copy import deepcopy
 
 META_KEY = "__rtplot_view__"
-CAPABILITIES = ["sections", "ui_state_v1", "presentation_v1", "dropdown_v1"]
+CAPABILITIES = ["sections", "ui_state_v1", "presentation_v1", "dropdown_v1", "xy_v1"]
 CONTROL_DEFAULTS = {"enabled": True, "visible": True, "busy": False, "selected": False, "reason": ""}
 SECTION_DEFAULTS = {"visible": True, "status": "idle", "message": ""}
 STATUSES = {"idle", "ready", "busy", "complete", "warning", "error"}

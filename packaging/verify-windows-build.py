@@ -12,7 +12,7 @@ exe=root/'dist'/'rtplot-server.exe'
 archive=CArchiveReader(str(exe))
 pyz=archive.open_embedded_archive(next(k for k in archive.toc if k.endswith('.pyz')))
 results={}
-for module in ('rtplot.client','rtplot.server_browser','rtplot.ui_state'):
+for module in ('rtplot.client','rtplot.server_browser','rtplot.ui_state','rtplot.xy'):
  actual=pyz.extract(module)
  source=build/'source'/Path(*module.split('.')).with_suffix('.py')
  expected=compile(source.read_bytes(),actual.co_filename,'exec',dont_inherit=True,optimize=0)

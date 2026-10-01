@@ -38,6 +38,7 @@ from time import perf_counter
 from typing import Optional
 
 from .ui_state import META_KEY, CAPABILITIES, CONTROL_DEFAULTS, declarations, merge_state
+from .xy import SENDING_XY, xy_declarations, decode_xy_arrays, pack_xy_message
 
 import numpy as np
 import zmq
@@ -232,6 +233,7 @@ SAVE_PLOT = 3
 RECEIVED_DISPLAY = 4
 RECEIVED_TEXT_INPUT = 5
 RECEIVED_UI_STATE = 6
+RECEIVED_XY = int(SENDING_XY)
 SOURCE_STALE_SECONDS = 5.0
 
 BIND_ME_ID = "bind_me"
@@ -401,6 +403,9 @@ class Tab:
     num_traces: int = 0
     traces_per_plot: list = field(default_factory=list)
     trace_labels: list = field(default_factory=list)
+    xy_plots: dict = field(default_factory=dict)
+    xy_data: dict = field(default_factory=dict)
+    xy_dirty: set = field(default_factory=set)
     last_pushed_li: int = DEFAULT_NUM_DATAPOINTS_IN_PLOT
     layout: list = field(default_factory=list)
     control_rows: list = field(default_factory=list)
@@ -426,6 +431,7 @@ class Tab:
     # Used by the resources panel so operators can see which tab is busy.
     data_rate_hz: float = 0.0
     _last_rx_ts: float = 0.0
+    _last_data_ts: float = 0.0
 
     # When the most recent client-supplied config failed to parse we
     # stash the reason + a unix timestamp so the browser can surface
@@ -439,13 +445,15 @@ class Tab:
 
     def reset_buffer_state(self, num_datapoints_in_plot, num_traces):
         """Reset the buffer indices when a new plot config arrives."""
-        self.ensure_buffer()
+        if num_traces:
+            self.ensure_buffer()
         self.num_datapoints_in_plot = num_datapoints_in_plot
         self.li = num_datapoints_in_plot
         self.buffer_bounds = np.array([0, num_datapoints_in_plot])
         self.num_traces = num_traces
         self.last_pushed_li = num_datapoints_in_plot
-        self.buffer[:num_traces, :num_datapoints_in_plot] = 0
+        if self.buffer is not None:
+            self.buffer[:num_traces, :num_datapoints_in_plot] = 0
 
 
 ###############################
@@ -663,6 +671,7 @@ def _expand_config(config):
 def parse_config(tab: Tab, json_config):
     """Translate a client plot config into the tab's buffer/trace metadata."""
     meta = config_metadata(json_config)
+    xy_plots = xy_declarations(json_config)
     view, registry = declarations(json_config, meta.get("view"))
     initial_state = merge_state({"controls": {}, "sections": {}}, meta.get("state", {}), registry, view)
     traces_per_plot = []
@@ -682,6 +691,9 @@ def parse_config(tab: Tab, json_config):
 
     for plot_counter, (_, plot_description) in enumerate(plot_entries):
         trace_names = plot_description["names"]
+        if plot_description.get("mode", "stream") == "xy":
+            traces_per_plot.append(0)
+            continue
         traces_per_plot.append(len(trace_names))
 
         if "xrange" in plot_description:
@@ -700,6 +712,10 @@ def parse_config(tab: Tab, json_config):
     tab.source_epoch = uuid.uuid4().hex
     tab.traces_per_plot = traces_per_plot
     tab.trace_labels = trace_info
+    tab.xy_plots = xy_plots
+    tab.xy_data = {}
+    tab.xy_dirty = set()
+    tab._last_data_ts = 0.0
     tab.control_rows = control_rows
     # Preserve display values across re-init when the same ids are reused;
     # drop ids that are no longer declared so stale data doesn't linger.
@@ -743,8 +759,12 @@ def build_config_message(tab: Tab, config_dict) -> dict:
         plots.append(
             {
                 "key": key,
+                "id": plot_description.get("id"),
+                "mode": plot_description.get("mode", "stream"),
+                "xscale": plot_description.get("xscale", "linear"),
                 "names": plot_description.get("names", []),
                 "colors": plot_description.get("colors"),
+                "show": plot_description.get("show"),
                 "line_style": plot_description.get("line_style"),
                 "line_width": plot_description.get("line_width"),
                 "title": plot_description.get("title"),
@@ -753,6 +773,7 @@ def build_config_message(tab: Tab, config_dict) -> dict:
                 "xrange": plot_description.get("xrange"),
                 "yrange": plot_description.get("yrange"),
                 "height": plot_description.get("height"),
+                "min_height": plot_description.get("min_height"),
             }
         )
     return {
@@ -810,6 +831,15 @@ def make_snapshot_message(tab: Tab):
         return None
     lo, hi = int(tab.buffer_bounds[0]), int(tab.buffer_bounds[1])
     return make_data_message(tab, MSG_SNAPSHOT, lo, hi)
+
+
+def make_xy_messages(tab: Tab, ids=None):
+    """Capture complete replacements before any asynchronous sends."""
+    return [pack_xy_message(
+        {"tab": tab.id, "session": tab.session, "generation": tab.generation,
+         "id": pid, "fps": tab.fps, "status": 1 if tab.title_color == "red" else 0},
+        *tab.xy_data[pid]) for pid in (tab.xy_data if ids is None else ids)
+        if pid in tab.xy_data]
 
 
 ###############################
@@ -1095,11 +1125,25 @@ async def _recv_array_async(sock):
     return arr.reshape(md["shape"])
 
 
+async def record_data_activity(tab, now):
+    """Keep source status and arrival-rate reporting shared by both plot modes."""
+    await source_availability(tab, True)
+    if tab._last_data_ts:
+        dt = now - tab._last_data_ts
+        if dt > 0:
+            weight = float(np.clip(dt * 3.0, 0, 1))
+            tab.fps = (tab.fps * (1 - weight) + weight / dt) if tab.fps else 1 / dt
+            tab.data_rate_hz = tab.fps
+    tab._last_data_ts = now
+    tab.title_color = "green"
+    if tab.status != "streaming":
+        tab.status = "streaming"
+        tab.error = None
+        await broadcast_tab(tab.id)
+
+
 async def zmq_receiver(tab: Tab):
     """Drain ``tab.data_sock`` as fast as possible into ``tab.buffer``."""
-    last_time = perf_counter()
-    fps = None
-
     while True:
         sock = tab.data_sock
         if sock is None:
@@ -1171,9 +1215,8 @@ async def zmq_receiver(tab: Tab):
             await source_availability(tab, True)
             refresh_config_message(tab)
             tab.initialized = True
-            fps = None
             tab.fps = 0.0
-            last_time = now
+            tab.data_rate_hz = 0.0
             tab.status = "streaming"
             tab.error = None
             # Blocking-handshake ack: tells initialize_plots() on the
@@ -1202,7 +1245,8 @@ async def zmq_receiver(tab: Tab):
             arr = await _recv_array_async(sock)
             if not tab.initialized:
                 continue
-            await source_availability(tab, True)
+            if not tab.num_traces:
+                continue
             tab.ensure_buffer()
 
             num_values = arr.shape[1]
@@ -1211,25 +1255,35 @@ async def zmq_receiver(tab: Tab):
 
             tab.buffer[:num_traces, li:li + num_values] = arr[:num_traces, :]
 
-            dt = now - last_time
-            last_time = now
-            if dt > 0:
-                if fps is None:
-                    fps = 1.0 / dt
-                else:
-                    s = float(np.clip(dt * 3.0, 0, 1))
-                    fps = fps * (1 - s) + (1.0 / dt) * s
-                tab.fps = fps
-                tab.data_rate_hz = fps
-
             tab.li = li + num_values
             tab.buffer_bounds[0] += num_values
             tab.buffer_bounds[1] += num_values
-            tab.title_color = "green"
-            if tab.status != "streaming":
-                tab.status = "streaming"
-                tab.error = None
-                await broadcast_tab(tab.id)
+            await record_data_activity(tab, now)
+
+        elif category == RECEIVED_XY:
+            # X/Y uses one multipart message, so malformed replacements can be
+            # fully drained without consuming the next category or losing sync.
+            if not sock.getsockopt(zmq.RCVMORE):
+                continue
+            frames = await sock.recv_multipart()
+            try:
+                if len(frames) != 3:
+                    raise ValueError("Expected X/Y metadata, X and Y frames")
+                meta = json.loads(frames[0])
+                if not isinstance(meta, dict):
+                    raise ValueError("X/Y metadata must be an object")
+                if not tab.initialized or (meta.get("session"), meta.get("generation")) != (tab.session, tab.generation):
+                    continue
+                pid = meta.get("id")
+                if pid not in tab.xy_plots:
+                    raise ValueError(f"Unknown X/Y plot ID: {pid!r}")
+                data = decode_xy_arrays(meta, frames[1], frames[2], tab.xy_plots[pid])
+            except (ValueError, TypeError, KeyError) as exc:
+                print(f"[{tab.id}] X/Y update rejected: {exc}")
+                continue
+            tab.xy_data[pid] = data
+            tab.xy_dirty.add(pid)
+            await record_data_activity(tab, now)
 
         elif category == SAVE_PLOT:
             # Legacy parquet-save; ignored but still drained.
@@ -1344,6 +1398,11 @@ async def ws_pusher():
             if not viewers_of(t.id):
                 # No browser is watching this tab, skip encoding cost.
                 continue
+
+            replacements = make_xy_messages(t, t.xy_dirty)
+            t.xy_dirty.clear()
+            for payload in replacements:
+                await broadcast_bytes_tab(t.id, payload)
 
             current_li = t.li
             last_li = t.last_pushed_li
@@ -1654,6 +1713,8 @@ async def handle_ws(request):
                         snap = make_snapshot_message(t)
                         if snap is not None:
                             await ws_send_bytes(ws, snap)
+                        for replacement in make_xy_messages(t):
+                            await ws_send_bytes(ws, replacement)
                     else:
                         await ws_send_text(
                             ws, {"type": "no_config", "tab": t.id}
@@ -1791,9 +1852,11 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
   const plots = [];
   let traceOffset = 0;
   function buildPlot(pcfg, parent) {
-    const xrange = SNAP.num_samples;
-    const xs = new Float64Array(xrange);
-    for (let i = 0; i < xrange; i++) xs[i] = i;
+    const isXY = pcfg.mode === 'xy';
+    const replacement = (SNAP.xy_data || []).find(data => data.id === pcfg.id);
+    const xrange = isXY ? (replacement ? replacement.x.length : 0) : SNAP.num_samples;
+    const xs = isXY ? Float64Array.from(replacement ? replacement.x : []) : new Float64Array(xrange);
+    if (!isXY) for (let i = 0; i < xrange; i++) xs[i] = i;
     const traceCount = pcfg.names.length;
     const colors = pcfg.colors || DEFAULT_COLORS;
     const widths = pcfg.line_width || [];
@@ -1802,10 +1865,11 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
     for (let t = 0; t < traceCount; t++) {
       series.push({
         label: pcfg.names[t],
-        stroke: resolveColor(colors[t]),
-        width: widths[t] || 1,
-        dash: (styles[t] === '-') ? [10, 5] : undefined,
+        stroke: resolveColor(colors[t] || DEFAULT_COLORS[t % DEFAULT_COLORS.length]),
+        width: (Array.isArray(widths) ? widths[t] : widths) || 1,
+        dash: ({'-': [10, 5], dashed: [10, 5], dotted: [2, 4], dashdot: [10, 4, 2, 4]})[styles[t]],
         points: { show: false },
+        show: (pcfg.show || [])[t] !== false,
       });
     }
     const wrap = document.createElement('div');
@@ -1813,7 +1877,7 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
     parent.appendChild(wrap);
     const data = [xs];
     for (let t = 0; t < traceCount; t++) {
-      const src = SNAP.trace_data[traceOffset + t];
+      const src = isXY ? (replacement ? replacement.y[t] : []) : SNAP.trace_data[traceOffset + t];
       data.push(Float64Array.from(src));
     }
     const opts = {
@@ -1821,7 +1885,8 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
       height: 260,
       title: pcfg.title || '',
       scales: {
-        x: { time: false, range: [0, xrange - 1] },
+        x: isXY ? { time: false, distr: pcfg.xscale === 'log' ? 3 : 1 }
+                : { time: false, range: [0, xrange - 1] },
         y: pcfg.yrange ? { range: [pcfg.yrange[0], pcfg.yrange[1]] } : {},
       },
       axes: [{ label: pcfg.xlabel || '' }, { label: pcfg.ylabel || '' }],
@@ -1830,9 +1895,9 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
       cursor: { drag: { x: true, y: false } },
     };
     const u = new uPlot(opts, data, wrap);
-    plots.push({ uplot: u, wrap: wrap, data: data, xs: xs, xrange: xrange,
+    plots.push({ uplot: u, wrap: wrap, data: data, xs: xs, xrange: xrange, isXY: isXY,
                  traceCount: traceCount, startIdx: traceOffset });
-    traceOffset += traceCount;
+    if (!isXY) traceOffset += traceCount;
   }
   let implicitRow = null;
   layout.forEach(entry => {
@@ -1857,11 +1922,12 @@ _SNAPSHOT_TEMPLATE = """<!doctype html>
     ],
     throwOnError: false,
   });
-  if (SNAP.animate) {
+  if (SNAP.animate && SNAP.num_samples && plots.some(p => !p.isXY)) {
     let phase = 0;
     setInterval(function () {
       phase = (phase + 1) % SNAP.num_samples;
       plots.forEach(function (p) {
+        if (p.isXY) return;
         const nd = [p.xs];
         for (let t = 0; t < p.traceCount; t++) {
           const src = SNAP.trace_data[p.startIdx + t];
@@ -1924,7 +1990,7 @@ def _build_snapshot_html(tab: Tab, animate: bool) -> str:
     """Serialize the given tab's plot state into a static snapshot."""
     num_points = tab.num_datapoints_in_plot
     num_traces = tab.num_traces
-    if num_traces == 0 or not tab.initialized or tab.buffer is None:
+    if not tab.initialized or (num_traces == 0 and not tab.xy_plots):
         return (
             "<!doctype html><html><body style='font-family:sans-serif;padding:32px'>"
             "<h1>rtplot snapshot</h1>"
@@ -1936,25 +2002,14 @@ def _build_snapshot_html(tab: Tab, animate: bool) -> str:
     lo = max(0, li - num_points)
     hi = li
 
-    plots = []
     cfg = tab.config_dict or OrderedDict()
-    for key, plot_description in _expand_config(cfg)[0]:
-        plots.append({
-            "key": key,
-            "names": plot_description.get("names", []),
-            "colors": plot_description.get("colors"),
-            "line_style": plot_description.get("line_style"),
-            "line_width": plot_description.get("line_width"),
-            "title": plot_description.get("title"),
-            "xlabel": plot_description.get("xlabel"),
-            "ylabel": plot_description.get("ylabel"),
-            "yrange": plot_description.get("yrange"),
-        })
+    plots = build_config_message(tab, cfg)["plots"]
 
     trace_data = []
-    arr = tab.buffer[:num_traces, lo:hi]
-    for i in range(num_traces):
-        trace_data.append([float(v) for v in arr[i]])
+    if num_traces:
+        arr = tab.buffer[:num_traces, lo:hi]
+        for i in range(num_traces):
+            trace_data.append([float(v) for v in arr[i]])
 
     payload = {
         "plots": plots,
@@ -1962,6 +2017,8 @@ def _build_snapshot_html(tab: Tab, animate: bool) -> str:
         "layout": tab.layout,
         "num_samples": int(hi - lo),
         "trace_data": trace_data,
+        "xy_data": [{"id": pid, "x": x.tolist(), "y": y.tolist()}
+                    for pid, (x, y) in tab.xy_data.items()],
         "animate": bool(animate),
     }
     html = _SNAPSHOT_TEMPLATE

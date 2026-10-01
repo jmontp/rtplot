@@ -66,3 +66,5 @@ for d in 01_hello_world 02_multiple_subplots 03_interactive_controls 05_multi_co
 Rerunning a script replaces that example's snapshot.
 
 Dropdown controls: [Dictionary](08_dropdown/run.py) · [Typed](08_dropdown/run_typed.py) · [API](../docs/dropdowns.md).
+
+X/Y curves and FFT spectra: [Guide](09_xy_fft/README.md) · [Dictionary](09_xy_fft/run.py) · [Typed](09_xy_fft/run_typed.py).

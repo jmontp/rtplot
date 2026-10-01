@@ -35,6 +35,7 @@ All from `rtplot.client`:
 | `initialize_plots(desc, *, view=None, ui_state=None)` | Declare layout, optional [sections and initial presentation state](sections.md). |
 | `set_ui_state(patch)` | Patch existing controls/sections; see [sections and state](sections.md). |
 | `send_array(A)` | Push samples: float, list, 1-D or 2-D `(num_traces, N)` numpy. |
+| `send_xy(plot_id, x, y)` | Replace one X/Y plot with numeric coordinates and one or more traces. |
 | `set_dropdown(id, value)` | Select a declared dropdown option; see [dropdowns](dropdowns.md). |
 | `set_display(id, value)` | Update a `display` (numeric) or `text` (string) element. |
 | `poll_controls()` | Drain the return channel; returns `ControlState(values, buttons)`. |
@@ -69,6 +70,9 @@ Styled-plot dict keys:
 | `xlabel` / `ylabel` | Axis labels. |
 | `yrange` | `[ymin, ymax]` — pins Y and speeds up rendering a lot. |
 | `xrange` | Samples visible at once (default 200). |
+| `mode` | `"stream"` (default) for scrolling samples, or `"xy"` for replacement curves. |
+| `id` | Unique, non-empty plot ID; required for `mode="xy"`. |
+| `xscale` | `"linear"` (default), or `"log"` for positive X coordinates on an X/Y plot. |
 | `height` | Per-plot height multiplier (default `1.0`). |
 
 ### Columns per row
@@ -144,8 +148,9 @@ on unknown keys (instead of silently-ignored typos), and required
 fields enforced at call time. The dict form stays supported — use it
 for quick scripts or when the layout comes from a config file.
 
-`yrange` / `xrange` accept tuples on the dataclass and lists on the
-dict form; both go over the wire as JSON lists.
+`yrange` accepts a tuple on the dataclass or a list in the dict form;
+it goes over the wire as a JSON list. `xrange` is an integer sample count
+for scrolling plots and is rejected for X/Y plots.
 
 ### LaTeX labels
 
@@ -177,7 +182,7 @@ else is optional with a sensible default.
 
 | Class | Minimum init | Optional keyword args |
 |---|---|---|
-| `Plot` | `Plot(names=["sig"])` | `colors`, `line_style`, `show`, `line_width`, `title`, `xlabel`, `ylabel`, `yrange`, `xrange`, `height` |
+| `Plot` | `Plot(names=["sig"])` | `colors`, `line_style`, `show`, `line_width`, `title`, `xlabel`, `ylabel`, `yrange`, `xrange`, `height`, `id`, `mode`, `xscale` |
 | `PlotRow` | `PlotRow([Plot(names=["sig"])], columns=1)` | — |
 | `ControlsRow` | `ControlsRow([...])` | — |
 | `Button` | `Button("id", "label")` | `color`, `height` |
@@ -202,7 +207,62 @@ client.send_array(np.array([[...]])) # 2-D (num_traces, N): batch of N
 ```
 
 2-D batching is the fastest way to push many samples without dropping
-frames.
+frames. In mixed layouts, `send_array()` includes **only scrolling traces**,
+in declaration order; X/Y plots contribute no rows to this array.
+
+### X/Y curves and FFT spectra
+
+Declare an X/Y plot and update it by ID. Typed and dictionary forms are
+equivalent, and can be placed in the same rows and sections as scrolling plots:
+
+```python
+from rtplot import client
+
+client.local_plot()
+client.initialize_plots([
+    client.Plot(names=["signal"], xrange=1024),
+    {"names": ["magnitude"], "id": "spectrum", "mode": "xy",
+     "xscale": "log", "xlabel": "Frequency (Hz)", "ylabel": "Magnitude (dB)"},
+])
+
+# Only the scrolling plot receives these samples.
+client.send_array(samples.reshape(1, -1))
+# Calculate frequencies and magnitudes in your sender; omit DC for log X.
+client.send_xy("spectrum", frequencies[1:], magnitude_db[1:])
+```
+
+`send_xy(plot_id, x, y)` replaces that plot's whole dataset on every call.
+X is one-dimensional; Y is shaped `(number_of_traces, len(x))`, or is
+one-dimensional for a single trace. All traces in the plot share X. Lists
+and NumPy arrays are accepted. Point counts can change between calls, and
+each plot can update at its own rate. Matching empty arrays clear a plot:
+`send_xy("spectrum", [], [])` for one trace, or an empty `(num_traces, 0)`
+array for multiple traces.
+
+Coordinates must be real and finite, with strictly increasing X values.
+Linear X supports negative values and zero; logarithmic X requires positive
+values. X is transmitted as float64 and Y as float32; values outside those
+finite ranges are rejected. Invalid shapes, duplicate IDs and unknown plot
+IDs raise errors. Use `xlabel`, `ylabel` and `yrange` as usual. The viewer's
+visible-sample setting applies only to scrolling plots.
+
+The sender computes the FFT, sample-rate mapping, windowing, normalization,
+and any dB conversion. Floor magnitudes before taking a logarithm to avoid
+infinite dB values. Y always uses a linear axis, which also displays
+sender-provided dB values correctly. See the runnable
+[signal and FFT example](../examples/09_xy_fft/README.md).
+
+Use client and browser server version 0.7.0 or newer together. X/Y initialization
+requires a successful handshake advertising `xy_v1`; an older server or
+`handshake_timeout=0` raises a compatibility error. The Qt desktop server
+does not support X/Y replacement plots. Existing scrolling layouts retain
+their original API and protocol.
+
+The server keeps the latest curve for reconnecting viewers and tab switches;
+reinitializing the layout clears curves. HTML snapshots preserve coordinates
+and axis scales. With `animate=True`, scrolling traces animate while X/Y
+curves stay fixed. If updates arrive faster than the server's push rate,
+viewers receive the latest replacement rather than every intermediate curve.
 
 ---
 

@@ -110,6 +110,9 @@ A rising line now draws itself in the browser tab.
 - **Remote-friendly.** Sender or plot host can bind. Live Bind /
   Connect buttons retarget without restart.
 - **Config lives with the data.** The sender declares plot layout.
+- **X/Y curves and FFT spectra.** Replace curves with sender-provided coordinates,
+  using linear or logarithmic X axes alongside scrolling traces. See the
+  [FFT example](examples/09_xy_fft/README.md).
 - **Responsive presentation.** Native phone sizing, essential actions, compact navigation, and explicit semantic styles. See the [presentation guide](docs/presentation.md) and [before/after screenshots](docs/presentation-screenshots/README.md).
 - **Sections and runtime state.** Optional collapsible sections, persistent status controls, and presentation updates that preserve streaming history. See the [section API](docs/sections.md) and [workflow example](examples/06_sections/README.md).
 - **Interactive controls.** Buttons, sliders, dials, displays — polled
