@@ -52,6 +52,28 @@ Start the server normally; each row can use a different column count.
 See the [multi-column example](examples/05_multi_column/) for typed and
 dict forms, including a layout with two, one, and three columns.
 
+### Linux shared-library errors
+
+If a standalone binary fails with `GLIBC_2.38 not found`, its bundled
+Python was built on a newer Linux system than yours. Run the server using
+your system's Python (3.9–3.12) instead:
+
+```bash
+python3 -m venv ~/.venvs/rtplot
+~/.venvs/rtplot/bin/python -m pip install --upgrade "better-rtplot[browser]"
+~/.venvs/rtplot/bin/python -m rtplot.server_browser
+```
+
+Open the URL printed by the server. On Ubuntu/Debian, install `python3-venv`
+if creating the virtual environment reports that it is missing.
+
+The Linux build workflow is pinned to Ubuntu 22.04 (glibc 2.35) for future
+binaries; existing release downloads are unaffected by this change.
+When building locally, use the oldest Linux version you intend to support,
+as recommended by [PyInstaller](https://pyinstaller.org/en/stable/usage.html#making-gnu-linux-apps-forward-compatible).
+
+### Python package
+
 **Client** — pip install in the env that runs your script:
 
 ```bash
