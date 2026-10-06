@@ -16,6 +16,7 @@ schema, the browser UI, and the `rtplot-server` CLI.
 - [Sending data](#sending-data)
 - [Interactive controls](#interactive-controls)
 - [Dropdown controls](dropdowns.md)
+- [Proposed grid picker requirements](grid-picker-requirements.html) (not implemented)
 - [Static HTML snapshots](#static-html-snapshots)
 - [Browser UI features](#browser-ui-features)
 - [CLI reference](#cli-reference)
