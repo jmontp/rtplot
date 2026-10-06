@@ -142,7 +142,8 @@
       c.item.hidden = !v.visible;
       c.item.classList.toggle('ui-disabled', disabled); c.item.classList.toggle('ui-selected', v.selected);
       c.item.setAttribute('aria-busy', String(v.busy));
-      c.reason.textContent = v.reason; c.reason.hidden = !v.reason; c.busy.hidden = !v.busy; c.selected.hidden = !v.selected;
+      c.reason.textContent = v.reason; c.reason.hidden = !v.reason; c.busy.hidden = !v.busy;
+      c.selected.hidden = !v.selected || !!c.item.querySelector('input[type=checkbox]');
       c.item.querySelectorAll('button,input,select,textarea,.ctrl-dial').forEach(el => {
         if (el.classList.contains('grid-cell')) return;
         if ('disabled' in el) el.disabled = disabled;

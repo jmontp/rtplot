@@ -1813,7 +1813,7 @@ async def handle_ws(request):
                     btn_id = payload.get("id")
                     tid = ws_tab.get(ws, BIND_ME_ID)
                     t = tabs.get(tid)
-                    if btn_id and t is not None and control_allowed(t, payload, {"button"}):
+                    if btn_id and t is not None and control_allowed(t, payload, {"button", "checkbox"}):
                         await send_control_event(
                             t, {"type": "button", "id": btn_id}
                         )

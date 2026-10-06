@@ -2,7 +2,7 @@
 from copy import deepcopy
 
 META_KEY = "__rtplot_view__"
-CAPABILITIES = ["sections", "ui_state_v1", "presentation_v1", "dropdown_v1", "xy_v1", "grid_picker_v1"]
+CAPABILITIES = ["sections", "ui_state_v1", "presentation_v1", "dropdown_v1", "xy_v1", "grid_picker_v1", "checkbox_v1"]
 CONTROL_DEFAULTS = {"enabled": True, "visible": True, "busy": False, "selected": False, "reason": ""}
 # Application-confirmed grid state rides in the same revisioned UI state as presentation.
 GRID_STATE_KEYS = {"value", "active", "cells", "message", "request"}

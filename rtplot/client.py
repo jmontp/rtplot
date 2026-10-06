@@ -232,6 +232,16 @@ class PlotRow:
 
 
 @dataclass
+class Checkbox:
+    """A change request; checked state is set with UI state ``selected``."""
+    id: str
+    label: str
+
+    def to_dict(self):
+        return {"type": "checkbox", "id": self.id, "label": self.label}
+
+
+@dataclass
 class Button:
     id: str
     label: str
@@ -704,6 +714,8 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, u
     if _xy_plots and "xy_v1" not in _server_capabilities:
         raise RuntimeError("X/Y plots require a browser server supporting xy_v1 and a successful "
                            "configuration handshake; update the server or check the connection")
+    if any(c["type"] == "checkbox" for c in _control_registry.values()) and "checkbox_v1" not in _server_capabilities:
+        raise RuntimeError("Checkbox controls require checkbox_v1; initialize a fallback layout instead")
     if any(c["type"] == "grid_picker" for c in _control_registry.values()) and "grid_picker_v1" not in _server_capabilities:
         # A grid on an older server would not enforce disabled cells or confirmed
         # selection. Callers fall back explicitly (for example, to a dropdown).

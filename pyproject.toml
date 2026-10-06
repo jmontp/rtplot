@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "better-rtplot"
-version = "0.8.0"
+version = "0.8.1"
 description = ""
 authors = ["jmontp <jmontp@umich.edu>"]
 license = "MIT"

@@ -713,6 +713,18 @@
           }
           b.addEventListener('click', () => sendCtrl({ type: 'control_button', id: el.id }));
           item.appendChild(b);
+        } else if (el.type === 'checkbox') {
+          const label = document.createElement('label');
+          const check = document.createElement('input');
+          check.type = 'checkbox';
+          label.append(check, document.createTextNode(' ' + (el.label || el.id)));
+          item.appendChild(label);
+          // A click requests a change; only application-confirmed state checks it.
+          check.addEventListener('change', () => {
+            check.checked = item.classList.contains('ui-selected');
+            sendCtrl({type: 'control_button', id: el.id});
+          });
+          item.rtplotUpdate = state => { check.checked = !!state.selected; };
         } else if (el.type === 'slider') {
           return makeScalarControl(el, buildSliderWidget);
         } else if (el.type === 'dial') {

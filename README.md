@@ -143,3 +143,12 @@ Issues and feature requests:
 Dropdown controls: [API and examples](docs/dropdowns.md).
 
 Grid picker controls: [API and examples](docs/grid-picker.md).
+
+### Source-confirmed checkboxes (0.8.1)
+
+`client.Checkbox("filter", "Trained with 5 Hz filter")` declares a native checkbox.
+A click appears in `client.poll_controls().buttons`; the application confirms
+its state with `client.set_ui_state({"controls": {"filter": {"selected": True}}})`.
+The browser does not change the check mark before confirmation. Disabled, busy,
+and session guards apply, and confirmed state synchronizes across browsers.
+The handshake capability is `checkbox_v1`; provide a dropdown fallback for older servers.
