@@ -17,9 +17,10 @@ def read():
 threading.Thread(target=read, daemon=True).start()
 client.local_plot()
 log = []
-bank = ControllerBank(load_seconds=float(sys.argv[1]) if len(sys.argv) > 1 else 0.2, warmup_seconds=0.3,
-                      log=log.append)
-bank.start(configuration)
+# "flat" forces the explicit fallback layout used with servers lacking grid_picker_v1.
+flat = 'flat' in sys.argv[1:]
+bank = ControllerBank(load_seconds=0.2, warmup_seconds=0.3, log=log.append)
+bank.start(configuration, grid=not flat)
 print(json.dumps({'ready': True, 'session': client._session, 'generation': client._generation}), flush=True)
 while True:
     while not commands.empty():
@@ -35,7 +36,7 @@ while True:
         elif op == 'reinit':
             # A new layout generation: requests from the old one must be dropped.
             bank = ControllerBank(load_seconds=bank.load_seconds, warmup_seconds=0.3, log=log.append)
-            bank.start(configuration)
+            bank.start(configuration, grid=not flat)
             result = client._generation
         else:
             result = None

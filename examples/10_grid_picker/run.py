@@ -94,9 +94,12 @@ class ControllerBank:
     controller histories, warms up, and requires a separate Enable.
     """
 
-    def __init__(self, entries=None, load_seconds=0.4, warmup_seconds=1.0, log=print):
+    def __init__(self, entries=None, load_seconds=0.4, warmup_seconds=1.0, log=print, settle_seconds=0.05):
         self.entries = entries or manifest()
         self.load_seconds, self.warmup_seconds, self.log = load_seconds, warmup_seconds, log
+        # A method change and a cell click are separate events that can straddle
+        # polls; wait briefly so they resolve to one final pair, not two switches.
+        self.settle_seconds, self.method_change = settle_seconds, None
         self.method, self.x, self.y, self.reference = 'M', 'j2', 'w2', False
         self.seen_method = self.method
         self.torque_on, self.flat = False, False
@@ -107,15 +110,22 @@ class ControllerBank:
         self.mass, self.gain, self.phase = 75.0, 0.5, 0.0
 
     # ---- layout -------------------------------------------------------------
-    def start(self, make_configuration=configuration):
+    def start(self, make_configuration=configuration, grid=True):
         controls, view = make_configuration()
         try:
+            if not grid:
+                raise RuntimeError('grid disabled')
             client.initialize_plots(controls, view=view, ui_state=self.ui_state())
         except RuntimeError:
             # Older server: never present a grid whose cell states it cannot enforce.
             self.flat = True
             client.initialize_plots(fallback_configuration(self.entries))
         self.publish_confirmed(None, initial=True)
+
+    def patch(self, ui_state):
+        # Servers older than 0.5.0 have no runtime UI state; the flat fallback still works.
+        if 'ui_state_v1' in client.server_capabilities():
+            client.set_ui_state(ui_state)
 
     def key(self):
         return ('REF', self.x, None) if self.reference else (self.method, self.x, self.y)
@@ -128,12 +138,16 @@ class ControllerBank:
 
     def ui_state(self):
         locked = {'enabled': False, 'reason': 'Stop torque before switching controllers'} if self.torque_on else {'enabled': None, 'reason': None}
+        enable = ({'enabled': False, 'reason': 'Torque is on'} if self.torque_on else
+                  {'enabled': False, 'reason': 'Wait for the controller to be ready'} if not self.ready else
+                  {'enabled': None, 'reason': None})
+        if self.flat:
+            # Only IDs declared by the fallback layout.
+            return {'controls': {'controller': {**locked, 'busy': None}, 'enable': enable}}
         return {'controls': {
             GRID: {**locked, 'busy': bool(self.loading) or None},
             'method': dict(locked), 'reference': {**locked, 'selected': self.reference or None},
-            'enable': ({'enabled': False, 'reason': 'Torque is on'} if self.torque_on else
-                       {'enabled': False, 'reason': 'Wait for the controller to be ready'} if not self.ready else
-                       {'enabled': None, 'reason': None}),
+            'enable': enable,
         }}
 
     # ---- confirmation -------------------------------------------------------
@@ -145,6 +159,7 @@ class ControllerBank:
             client.set_display('active_model', values['active_model'])
             if 'dropdown_v1' in client.server_capabilities():
                 client.set_dropdown('controller', self.entries[key]['controller_id'])
+            self.patch(self.ui_state())
             return
         values['method'] = self.method
         client.set_grid_picker(GRID, self.x, self.y, active=not self.reference, cells=self.cells(self.method),
@@ -152,6 +167,10 @@ class ControllerBank:
         self.seen_method = self.method
 
     def reject(self, request_id, reason):
+        if self.flat:
+            self.publish_confirmed(None)   # restores the dropdown to the active controller
+            self.patch({'controls': {'controller': {'reason': reason}}})
+            return
         client.reject_grid_request(GRID, request_id, reason, values={'method': self.method}, ui_state=self.ui_state())
         self.seen_method = self.method
 
@@ -159,8 +178,12 @@ class ControllerBank:
         """Begin loading an available checkpoint. Torque stays off until Enable."""
         self.loading = (key, request_id, now + self.load_seconds)
         self.ready = False
-        client.set_ui_state({'controls': {GRID: {'busy': True, 'message': f'Loading {describe(key)}…'},
-                                          'enable': {'enabled': False, 'reason': 'Loading controller'}}})
+        loading = {'enable': {'enabled': False, 'reason': 'Loading controller'}}
+        if self.flat:
+            loading['controller'] = {'busy': True}
+        else:
+            loading[GRID] = {'busy': True, 'message': f'Loading {describe(key)}…'}
+        self.patch({'controls': loading})
 
     def finish(self, now):
         key, request_id, _ = self.loading
@@ -194,15 +217,16 @@ class ControllerBank:
         self.gain = controls.values.get('gain', 0.5)
         if 'stop' in controls.buttons and self.torque_on:
             self.torque_on = False
-            client.set_ui_state(self.ui_state())
+            self.patch(self.ui_state())
         if 'enable' in controls.buttons and not self.torque_on and self.ready and not self.loading:
             self.torque_on = True
-            client.set_ui_state(self.ui_state())
+            self.patch(self.ui_state())
         if not self.ready and not self.loading and now >= self.ready_at:
             self.ready = True
-            client.set_display('readiness', 'Ready')
-            client.set_ui_state(self.ui_state())
-        target = self.flat_target(controls) if self.flat else self.grid_target(controls)
+            if not self.flat:
+                client.set_display('readiness', 'Ready')
+            self.patch(self.ui_state())
+        target = self.flat_target(controls) if self.flat else self.grid_target(controls, now)
         if target is not None:
             if self.loading:
                 self.queued = target   # sequential: keep only the latest resolved choice
@@ -214,19 +238,24 @@ class ControllerBank:
                 target, self.queued = self.queued, None
                 self.resolve(*target, now)
 
-    def grid_target(self, controls):
-        """Resolve one explicit final (method, x, y) or reference from this poll's input."""
+    def grid_target(self, controls, now):
+        """Resolve one explicit final (method, x, y) or reference from recent input."""
         requests = [r for r in controls.grid_requests if r.id == GRID]
         self.requests.extend(requests)
         method = controls.values.get('method', self.seen_method)
-        method_changed, self.seen_method = method != self.seen_method, method
+        if method != self.seen_method:
+            self.method_change = (method, now)
+        self.seen_method = method
         if requests:
+            self.method_change = None
             last = requests[-1]
             return (method, last.x, last.y), last.request_id
         if 'reference' in controls.buttons:
+            self.method_change = None
             return ('REF', self.x, None), None
-        if method_changed:
-            # A method change keeps the confirmed coordinates (and leaves reference mode).
+        if self.method_change and now - self.method_change[1] >= self.settle_seconds:
+            # A method change alone keeps the confirmed coordinates (and leaves reference mode).
+            method, self.method_change = self.method_change[0], None
             return (method, self.x, self.y), None
         return None
 

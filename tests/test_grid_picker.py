@@ -203,3 +203,44 @@ class TestGridPicker(_ServerTest):
                 widths = {round(b['width']) for b in boxes}
                 self.assertLessEqual(max(widths) - min(widths), 1)  # equal-sized cells
                 page.context.close()
+
+
+class TestGridPickerFallback(_ServerTest):
+    """The example's explicit flat-dropdown fallback for servers without grid_picker_v1."""
+
+    def setUp(self):
+        self.pub = Publisher(port='flat', script='grid_publisher.py')
+        self.pw = sync_playwright().start()
+        self.browser = self.pw.chromium.launch()
+        self.errors = []
+
+    def tearDown(self):
+        self.browser.close(); self.pw.stop(); self.pub.stop()
+        self.assertEqual(self.errors, [])
+
+    def test_flat_dropdown_switches_and_rejects(self):
+        page = self.browser.new_page()
+        page.on('pageerror', lambda e: self.errors.append(str(e)))
+        page.add_init_script(INSTRUMENT)
+        page.goto('http://localhost:8050/')
+        select = page.get_by_role('combobox', name='Controller')
+        page.wait_for_function("document.querySelector('select')?.disabled === false")
+        self.assertEqual(page.locator('.grid-cell').count(), 0)
+        self.assertEqual(select.locator('option').count(), 28)  # 30 checkpoints minus 2 unavailable
+        readout = page.locator('[data-control-id=active_model] .ctrl-textval')
+        select.select_option('D-j1-w3')
+        page.wait_for_function("document.querySelector('[data-control-id=active_model] .ctrl-textval').textContent.endsWith('D-j1-w3')")
+        self.assertTrue(readout.inner_text().startswith('Active damping · J1'))
+        state = TestGridPicker.wait_state(self, lambda s: s['ready'] and not s['loading'])
+        self.assertEqual(state['switches'], [['D', 'j1', 'w3']])
+        page.get_by_role('button', name='Enable torque').click()
+        page.wait_for_function("document.querySelector('select').disabled")
+        # Force the dropdown enabled: the application still rejects and restores it.
+        self.pub.command('patch', patch={'controls': {'controller': {'enabled': None, 'reason': None}}})
+        page.wait_for_function("!document.querySelector('select').disabled")
+        select.select_option('E-j2-w2')
+        page.wait_for_function("document.querySelector('select').value === 'D-j1-w3'")
+        page.get_by_text('Rejected: stop torque before switching controllers').wait_for()
+        self.assertEqual(self.state()['switches'], [['D', 'j1', 'w3']])
+
+    state = TestGridPicker.state

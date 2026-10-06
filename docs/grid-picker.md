@@ -72,9 +72,11 @@ since the previous poll, in arrival order, drained once per poll.
   checkpoint is acknowledged without a switch).
 
 Method dropdowns stay ordinary dropdowns. When a method change and a grid request
-arrive in the same poll, resolve one explicit final pair, e.g. the latest
-dropdown value with the last grid request, and switch at most once. A method
-change alone resolves at the last **confirmed** coordinates. Handle requests
+arrive together, resolve one explicit final pair, e.g. the latest dropdown value
+with the last grid request, and switch at most once. They are separate events
+and can straddle two polls, so wait briefly (the example uses 50 ms) after a
+method-only change before resolving it at the last **confirmed** coordinates;
+otherwise the intermediate combination is loaded first. Handle requests
 sequentially; while a load is in progress keep only the latest resolved choice.
 
 ## Confirmation, rejection and pending state
