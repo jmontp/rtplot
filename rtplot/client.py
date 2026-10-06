@@ -4,9 +4,10 @@ import time
 import uuid
 import warnings
 import json
-from .ui_state import META_KEY, declarations, merge_state, presentation_requested
+from .ui_state import META_KEY, declarations, merge_state, presentation_requested, grid_cell
 from .xy import SENDING_XY, xy_declarations, normalize_xy
 from collections import OrderedDict, namedtuple
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Union
 
@@ -29,6 +30,7 @@ control_socket.setsockopt(zmq.RCVHWM, 1000)
 #Non-blocking local state for controls, drained on each poll_controls() call
 _control_values = {}
 _control_button_events = []
+_grid_requests = []
 _last_control_poll = time.monotonic()
 
 # Cached payload of the most recent initialize_plots() call. The server
@@ -108,9 +110,27 @@ _server_capabilities = set()
 _source_epoch = None
 _last_ui_publish = 0.0
 _xy_plots = {}
+# Values the application confirmed together with a grid selection, keyed by
+# control ID as {"value": ..., "revision": UI revision that set it}. Resent with
+# UI state so a restarted server restores them; applied once per revision.
+_ui_values = {}
 
-#Lightweight result type returned by poll_controls()
-ControlState = namedtuple("ControlState", ["values", "buttons"])
+#One discrete grid selection request; request_id is unique per browser action.
+GridRequest = namedtuple("GridRequest", ["id", "x", "y", "request_id"])
+
+
+class ControlState(namedtuple("ControlState", ["values", "buttons"])):
+    """Result of poll_controls(): ``values``, ``buttons`` and ``grid_requests``.
+
+    ``grid_requests`` (a list of GridRequest) is an attribute rather than a
+    tuple item, so existing ``values, buttons = poll_controls()`` code works.
+    """
+    grid_requests = ()
+
+    def __new__(cls, values, buttons, grid_requests=()):
+        self = super().__new__(cls, values, buttons)
+        self.grid_requests = list(grid_requests)
+        return self
 
 
 ##########################################
@@ -332,9 +352,36 @@ class Dropdown:
 
 
 @dataclass
+class GridPicker:
+    """Discrete X/Y coordinate picker (browser server >= 0.8.0).
+
+    Options are strings or {"value", "label"} dictionaries with IDs unique per
+    axis. X increases left to right; y_options[0] is the bottom row. ``value``
+    is the confirmed (x, y) pair and defaults to the first X and Y options.
+    ``active=False`` shows the pair as remembered rather than active.
+    """
+    id: str
+    label: str
+    x_options: List[Union[str, dict]]
+    y_options: List[Union[str, dict]]
+    x_label: str = ""
+    y_label: str = ""
+    value: Optional[Tuple[str, str]] = None
+    active: Optional[bool] = None
+    height: Optional[float] = None
+
+    def to_dict(self):
+        value = None if self.value is None else {"x": self.value[0], "y": self.value[1]}
+        return _drop_none({"type": "grid_picker", "id": self.id, "label": self.label,
+                           "x_label": self.x_label, "y_label": self.y_label,
+                           "x_options": self.x_options, "y_options": self.y_options,
+                           "value": value, "active": self.active, "height": self.height})
+
+
+@dataclass
 class ControlsRow:
     """A row of control widgets, rendered in place of a plot."""
-    controls: List[Union[Button, Slider, Dial, Display, Text, TextInput, Dropdown, dict]] = field(default_factory=list)
+    controls: List[Union[Button, Slider, Dial, Display, Text, TextInput, Dropdown, GridPicker, dict]] = field(default_factory=list)
 
     section: Optional[str] = None
     title: Optional[str] = None
@@ -592,6 +639,7 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, u
     """
     global plot_desc_dict, _generation, _ui_revision, _ui_state, _view, _xy_plots
     global _control_registry, _server_capabilities, _source_epoch, _control_button_events, _last_control_poll
+    global _grid_requests, _ui_values
 
     #Process int inputs
     if isinstance(plot_descriptions,int):
@@ -649,11 +697,18 @@ def initialize_plots(plot_descriptions=1, handshake_timeout=2.0, *, view=None, u
     _source_epoch = None
     _server_capabilities = set()
     _control_button_events = []
+    _grid_requests = []
+    _ui_values = {}
     _last_control_poll = time.monotonic()
     _send_initialize_with_handshake(plot_desc_dict, handshake_timeout)
     if _xy_plots and "xy_v1" not in _server_capabilities:
         raise RuntimeError("X/Y plots require a browser server supporting xy_v1 and a successful "
                            "configuration handshake; update the server or check the connection")
+    if any(c["type"] == "grid_picker" for c in _control_registry.values()) and "grid_picker_v1" not in _server_capabilities:
+        # A grid on an older server would not enforce disabled cells or confirmed
+        # selection. Callers fall back explicitly (for example, to a dropdown).
+        raise RuntimeError("Grid pickers require an acknowledged rtplot browser server >= 0.8.0 "
+                           "(grid_picker_v1); initialize a fallback layout instead")
     if (view is not None or ui_state is not None) and "ui_state_v1" not in _server_capabilities:
         warnings.warn("Sections/UI state require rtplot server >= 0.5.0. This server did not "
                       "confirm support: layout may be flat and disabled states are NOT enforced.",
@@ -711,6 +766,8 @@ def _send_initialize_with_handshake(cfg, timeout):
                     return
             elif evtype == "button" and _current_event(event):
                 _control_button_events.append(event.get("id"))
+            elif evtype == "grid" and _current_event(event):
+                _grid_requests.append(_grid_request(event))
             elif evtype == "slider":
                 _control_values[event.get("id")] = float(event.get("value", 0.0))
             elif evtype == "text":
@@ -734,20 +791,25 @@ def _wire_config(cfg):
     # Old servers already skip non_plot_labels entries. Metadata adds no traces.
     return {**cfg, META_KEY: {"non_plot_labels": [], "rtplot": {
         "session": _session, "generation": _generation, "view": _view,
-        "revision": _ui_revision, "state": _ui_state,
+        "revision": _ui_revision, "state": _ui_state, "values": _ui_values,
     }}}
 
 
 def _accept_ack(event):
-    global _server_capabilities, _source_epoch, _control_button_events
+    global _server_capabilities, _source_epoch, _control_button_events, _grid_requests
     if event.get("session") is not None and (event.get("session"), event.get("generation")) != (_session, _generation):
         return False
     _server_capabilities = set(event.get("capabilities", []))
     epoch = event.get("source_epoch")
     if epoch != _source_epoch:
         _control_button_events = []
+        _grid_requests = []
     _source_epoch = epoch
     return True
+
+
+def _grid_request(event):
+    return GridRequest(event.get("id"), event.get("x"), event.get("y"), event.get("request_id"))
 
 
 def _current_event(event):
@@ -765,7 +827,7 @@ def _publish_ui_if_due(force=False):
         return
     socket.send_string(SENDING_UI_STATE, zmq.SNDMORE)
     socket.send_json({"session": _session, "generation": _generation,
-                      "revision": _ui_revision, "state": _ui_state})
+                      "revision": _ui_revision, "state": _ui_state, "values": _ui_values})
     _last_ui_publish = now
 
 
@@ -789,6 +851,119 @@ def set_ui_state(patch):
     return changed
 
 
+def server_capabilities():
+    """Capabilities the browser server acknowledged at initialize_plots()."""
+    return frozenset(_server_capabilities)
+
+
+def _grid_info(control_id):
+    info = _control_registry.get(control_id, {})
+    if info.get("type") != "grid_picker":
+        raise ValueError(f"Unknown grid picker ID: {control_id!r}")
+    if "grid_picker_v1" not in _server_capabilities:
+        raise RuntimeError("Grid pickers require rtplot browser server >= 0.8.0")
+    return info
+
+
+def _linked_value(control_id, value):
+    info = _control_registry.get(control_id, {})
+    kind = info.get("type")
+    if kind == "dropdown" and value in info["options"]:
+        return value
+    if kind in ("text", "text_input") and isinstance(value, str):
+        return value
+    if kind == "display" and isinstance(value, (int, float, str)) and not isinstance(value, bool):
+        return float(value) if not isinstance(value, str) else value
+    raise ValueError(f"Linked value for {control_id!r} must suit a declared dropdown, text, "
+                     "text_input or display control")
+
+
+def _remember_linked(control_id, value):
+    if control_id in _ui_values:
+        _ui_values[control_id] = {"value": value, "revision": _ui_values[control_id]["revision"]}
+
+
+def _normalize_cells(cells, info):
+    if isinstance(cells, dict) and all(isinstance(k, tuple) and len(k) == 2 for k in cells):
+        nested = {}
+        for (x, y), cell in cells.items():
+            nested.setdefault(x, {})[y] = dict(cell)
+        return nested
+    return cells
+
+
+def set_grid_picker(control_id: str, x: str, y: str, *, active: bool = True, cells=None,
+                    message: Optional[str] = None, request_id: Optional[str] = None,
+                    values: Optional[dict] = None, ui_state: Optional[dict] = None):
+    """Publish the application-confirmed grid selection (server >= 0.8.0).
+
+    Emits no input events and never rebuilds plots. ``x``/``y`` are declared
+    option IDs; ``active=False`` keeps them as remembered coordinates without
+    marking a cell active (for example, while a reference is active).
+
+    cells: optional full replacement of per-cell overrides, either
+        ``{(x, y): {...}}`` or ``{x: {y: {...}}}`` with ``enabled``, ``busy``,
+        ``reason`` and ``label``. None keeps the current overrides.
+    message: status text shown under the grid; None keeps the current text.
+    request_id: the GridRequest this update resolves (accepted or rejected).
+        Viewers clear their pending marker when it matches.
+    values: dropdown/text/text_input/display values that change together with
+        this selection (for example, the method dropdown and readout).
+    ui_state: additional set_ui_state()-style patch applied atomically.
+
+    All parts reach every viewer in one update. Raises ValueError for undeclared
+    IDs or invalid values; nothing is published in that case.
+    """
+    global _ui_state, _ui_revision
+    info = _grid_info(control_id)
+    entry = {"value": {"x": x, "y": y}, "active": active, "request": request_id}
+    if cells is not None:
+        entry["cells"] = _normalize_cells(cells, info)
+    if message is not None:
+        entry["message"] = message
+    patch = deepcopy(ui_state) if ui_state is not None else {}
+    if not isinstance(patch, dict):
+        raise ValueError("ui_state must be a dictionary patch")
+    controls = dict(patch.get("controls") or {})
+    controls[control_id] = {**(controls.get(control_id) or {}), **entry}
+    patch["controls"] = controls
+    merged = merge_state(_ui_state, patch, _control_registry, _view)
+    linked = {cid: _linked_value(cid, value) for cid, value in (values or {}).items()}
+    # Every confirmation is a new revision, so identical repeated rejections
+    # still resolve their requests.
+    _ui_state = merged
+    _ui_revision += 1
+    for cid, value in linked.items():
+        _ui_values[cid] = {"value": value, "revision": _ui_revision}
+        if _control_registry[cid]["type"] in ("dropdown", "text_input"):
+            # The server does not echo linked values; keep poll_controls() consistent.
+            _control_values[cid] = value
+    _publish_ui_if_due(force=True)
+
+
+def grid_selection(control_id: str):
+    """Return the confirmed (x, y, active) for a grid as last set by this application."""
+    info = _control_registry.get(control_id, {})
+    if info.get("type") != "grid_picker":
+        raise ValueError(f"Unknown grid picker ID: {control_id!r}")
+    state = _ui_state.get("controls", {}).get(control_id, {})
+    value = state.get("value", info["default"])
+    return value["x"], value["y"], state.get("active", info["active"])
+
+
+def reject_grid_request(control_id: str, request_id: Optional[str], reason: str, *,
+                        values: Optional[dict] = None, ui_state: Optional[dict] = None):
+    """Resolve a request without changing the confirmed selection, showing ``reason``."""
+    x, y, active = grid_selection(control_id)
+    set_grid_picker(control_id, x, y, active=active, message=reason, request_id=request_id,
+                    values=values, ui_state=ui_state)
+
+
+def grid_cell_state(control_id: str, x: str, y: str):
+    """Current merged per-cell override (enabled, busy, reason, label)."""
+    return grid_cell(_ui_state, control_id, x, y)
+
+
 def set_display(display_id: str, value):
     """Push a single display box value to the browser.
 
@@ -804,6 +979,7 @@ def set_display(display_id: str, value):
         payload_value = float(value)
     else:
         payload_value = str(value)
+    _remember_linked(str(display_id), payload_value)
     socket.send_string(SENDING_DISPLAY, zmq.SNDMORE)
     socket.send_json({"id": str(display_id), "value": payload_value})
 
@@ -816,6 +992,7 @@ def set_text_input(input_id: str, value):
     and the server keeps the value as the current control state returned by
     poll_controls().
     """
+    _remember_linked(str(input_id), str(value))
     socket.send_string(SENDING_TEXT_INPUT, zmq.SNDMORE)
     socket.send_json({"id": str(input_id), "value": str(value)})
 
@@ -827,6 +1004,7 @@ def set_dropdown(control_id: str, value: str):
         raise ValueError("set_dropdown requires a dropdown ID and a declared string value")
     if "dropdown_v1" not in _server_capabilities:
         raise RuntimeError("set_dropdown requires rtplot browser server >= 0.6.1")
+    _remember_linked(control_id, value)
     socket.send_string(SENDING_TEXT_INPUT, zmq.SNDMORE)
     socket.send_json({"id": control_id, "value": value, "session": _session, "generation": _generation})
 
@@ -839,6 +1017,9 @@ def poll_controls():
         remain floats; text_input and dropdown controls remain strings.
       - buttons: list of button ids that fired since the previous poll
         (cleared after this call).
+      - grid_requests (attribute): GridRequest(id, x, y, request_id) tuples
+        received since the previous poll, in arrival order. Requests are not
+        selections; confirm or reject each with set_grid_picker().
 
     Call this from your tight loop before computing the next sample.
 
@@ -849,7 +1030,7 @@ def poll_controls():
     restarting their script. The request is consumed silently — the
     returned ControlState only ever contains control/button events.
     """
-    global _control_button_events, _source_epoch, _last_control_poll
+    global _control_button_events, _source_epoch, _last_control_poll, _grid_requests
     now = time.monotonic()
     stale_poll = "ui_state_v1" in _server_capabilities and now - _last_control_poll > 5.0
     _last_control_poll = now
@@ -857,6 +1038,7 @@ def poll_controls():
         # An idle/disconnected application's PULL socket can still hold actions
         # sent before the server detected the outage. Drain them without replay.
         _control_button_events = []
+        _grid_requests = []
         _source_epoch = None
     _publish_ui_if_due(force=stale_poll)
     while True:
@@ -867,15 +1049,17 @@ def poll_controls():
         except zmq.ZMQError:
             break
         evtype = event.get("type")
-        if stale_poll and evtype in ("config_ack", "button", "slider", "text"):
+        if stale_poll and evtype in ("config_ack", "button", "slider", "text", "grid"):
             continue
         if evtype == "config_ack":
             _accept_ack(event)
             continue
-        if evtype in ("button", "slider", "text") and not _current_event(event):
+        if evtype in ("button", "slider", "text", "grid") and not _current_event(event):
             continue
         if evtype == "button":
             _control_button_events.append(event.get("id"))
+        elif evtype == "grid":
+            _grid_requests.append(_grid_request(event))
         elif evtype == "slider":
             _control_values[event.get("id")] = float(event.get("value", 0.0))
         elif evtype == "text":
@@ -884,6 +1068,7 @@ def poll_controls():
             if plot_desc_dict is not None:
                 socket.send_string(SENDING_PLOT_UPDATE)
                 _control_button_events = []
+                _grid_requests = []
                 socket.send_json(_wire_config(plot_desc_dict))
                 # Surface a one-line confirmation so the user can see in
                 # their script log that the recovery handshake worked.
@@ -892,9 +1077,9 @@ def poll_controls():
                 # check that poll_controls() is actually being called.
                 print("rtplot.client: resent cached initialize_plots() config")
 
-    buttons = _control_button_events
-    _control_button_events = []
-    return ControlState(values=dict(_control_values), buttons=buttons)
+    buttons, grid_requests = _control_button_events, _grid_requests
+    _control_button_events, _grid_requests = [], []
+    return ControlState(dict(_control_values), buttons, grid_requests)
 
 
 def save_snapshot(path, server_url=None, animate=False, timeout=5.0):

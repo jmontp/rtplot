@@ -204,6 +204,7 @@
   <div id="plots" class="row"></div>
   <script src="/static/uPlot.iife.min.js"></script>
   <script src="/static/ui-view.js"></script>
+  <script src="/static/grid-picker.js"></script>
   <script src="/static/katex/katex.min.js"></script>
   <script src="/static/katex/auto-render.min.js"></script>
   <script>
@@ -461,7 +462,7 @@
       let lastStatus = { fps: 0, statusByte: 0, nonPlot: 0, peers: 0, dirty: true };
       let viewManager = null;
       let activeLayout = null;
-      const controlElements = { displays: {}, displayFormats: {}, displayKinds: {}, sliders: {}, textInputs: {} };
+      const controlElements = { displays: {}, displayFormats: {}, displayKinds: {}, sliders: {}, textInputs: {}, grids: {} };
 
       const presentationTargets = '.section-nav,.section-header,#header,#menu-panel,#tabbar,.uplot';
       let presentationPointer = false;
@@ -766,6 +767,12 @@
           label.appendChild(select);
           item.appendChild(label);
           controlElements.textInputs[el.id] = select;
+        } else if (el.type === 'grid_picker') {
+          item.classList.add('ctrl-grid');
+          const grid = new RtplotGridPicker(el, (x, y) => sendCtrl({type: 'control_grid', id: el.id, x, y}));
+          item.appendChild(grid.node);
+          item.rtplotUpdate = (state, disabled, reasonId) => grid.update(state, disabled, reasonId);
+          controlElements.grids[el.id] = grid;
         } else if (el.type === 'text_input') {
           item.classList.add('ctrl-text-input', 'flex');
           if (el.label) {
@@ -891,6 +898,20 @@
         controlElements.displayKinds = {};
         controlElements.sliders = {};
         controlElements.textInputs = {};
+        controlElements.grids = {};
+      }
+
+      function applyGridPending(pending) {
+        if (!pending) return;
+        for (const [id, grid] of Object.entries(controlElements.grids)) grid.setPending(pending[id]);
+      }
+
+      // Linked values, confirmed state and pending requests from one message are
+      // applied in one task, so viewers never render a contradictory selection.
+      function applyUiMessage(msg) {
+        if (msg.values) { applyTextValues(msg.values.texts); applyDisplayValues(msg.values.displays); }
+        viewManager.apply(msg.state || {}, msg.revision ?? 0);
+        applyGridPending(msg.grid_pending);
       }
 
       function showEmptyState(text) {
@@ -1020,7 +1041,12 @@
             activeLayout.session === cfg.session && activeLayout.generation === cfg.generation) {
           viewManager.connection(true);
           viewManager.source(cfg.source_available !== false, cfg.source_reason || '');
+          // Converge dropdowns and readouts after a reconnect; text-input drafts stay local.
+          applyTextValues(Object.fromEntries(Object.entries(cfg.text_values || {})
+            .filter(([id]) => controlElements.textInputs[id]?.setServerValue)));
+          applyDisplayValues(cfg.display_values);
           viewManager.apply(cfg.ui_state || {}, cfg.ui_revision ?? 0);
+          applyGridPending(cfg.grid_pending || {});
           return;
         }
         destroyPlots();
@@ -1061,6 +1087,7 @@
         viewManager.finish();
         applySliderValues(cfg.slider_values); applyTextValues(cfg.text_values); applyDisplayValues(cfg.display_values);
         viewManager.apply(cfg.ui_state || {}, cfg.ui_revision ?? 0);
+        applyGridPending(cfg.grid_pending || {});
         renderLatexIn(plotsDiv); applyVisibleSamples(); refreshPresentation(); scheduleRender();
       }
 
@@ -1515,7 +1542,7 @@
               buildPlots(msg);
             } else if (msg.type === 'ui_state') {
               if (activeLayout && msg.tab === activeLayout.tab && msg.session === activeLayout.session &&
-                  msg.generation === activeLayout.generation) viewManager.apply(msg.state, msg.revision);
+                  msg.generation === activeLayout.generation) applyUiMessage(msg);
             } else if (msg.type === 'no_config') {
               if (msg.tab && msg.tab !== activeTab) return;
               const t = knownTabs[msg.tab];

@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Optional
 
-from .ui_state import META_KEY, CAPABILITIES, CONTROL_DEFAULTS, declarations, merge_state
+from .ui_state import META_KEY, CAPABILITIES, CONTROL_DEFAULTS, declarations, merge_state, grid_cell
 from .xy import SENDING_XY, xy_declarations, decode_xy_arrays, pack_xy_message
 
 import numpy as np
@@ -389,6 +389,10 @@ class Tab:
     ui_state: dict = field(default_factory=lambda: {"controls": {}, "sections": {}})
     ui_revision: int = -1
     ui_dirty: bool = False
+    # Server-side grid requests awaiting the application: id -> {x, y, request_id}.
+    grid_pending: dict = field(default_factory=dict)
+    # Linked values confirmed with a UI revision, delivered with the next snapshot.
+    ui_values_outbox: dict = field(default_factory=lambda: {"texts": {}, "displays": {}})
     source_available: bool = False
     source_reason: str = "Waiting for source"
     source_epoch: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -546,6 +550,38 @@ def config_metadata(config):
     return meta
 
 
+def apply_linked_values(tab, values, after_revision):
+    """Apply application-linked control values set after ``after_revision``.
+
+    Linked values accompany a confirmed grid selection (for example the method
+    dropdown and a readout). They are not user input, so no event is echoed.
+    """
+    if not isinstance(values, dict):
+        return
+    for cid, item in values.items():
+        info = tab.control_registry.get(cid, {})
+        if not isinstance(item, dict) or type(item.get("revision")) is not int or item["revision"] <= after_revision:
+            continue
+        value, kind = item.get("value"), info.get("type")
+        if kind == "dropdown" and value in info["options"] or kind == "text_input" and isinstance(value, str):
+            tab.text_values[cid] = value
+            tab.ui_values_outbox["texts"][cid] = value
+        elif kind in ("text", "display") and isinstance(value, (int, float, str)) and not isinstance(value, bool):
+            tab.display_values[cid] = value
+            tab.ui_values_outbox["displays"][cid] = value
+
+
+def resolve_grid_pending(tab):
+    """Drop pending requests the confirmed state has resolved."""
+    for gid, pending in list(tab.grid_pending.items()):
+        info = tab.control_registry.get(gid, {})
+        state = tab.ui_state.get("controls", {}).get(gid, {})
+        value = state.get("value", info.get("default"))
+        if (state.get("request") == pending["request_id"] or info.get("type") != "grid_picker"
+                or (state.get("active", info.get("active", True)) and value == {"x": pending["x"], "y": pending["y"]})):
+            del tab.grid_pending[gid]
+
+
 def accept_ui_snapshot(tab, payload):
     if (payload.get("session"), payload.get("generation")) != (tab.session, tab.generation) or tab.session is None:
         return False
@@ -554,15 +590,25 @@ def accept_ui_snapshot(tab, payload):
         return False
     if revision > tab.ui_revision:
         state = merge_state({"controls": {}, "sections": {}}, payload.get("state", {}), tab.control_registry, tab.view)
+        previous = tab.ui_revision
         tab.ui_state = state
         tab.ui_revision = revision
+        apply_linked_values(tab, payload.get("values"), previous)
+        resolve_grid_pending(tab)
         tab.ui_dirty = True
     return True
 
 
 def ui_snapshot(tab):
-    return {"type": "ui_state", "tab": tab.id, "session": tab.session,
-            "generation": tab.generation, "revision": tab.ui_revision, "state": tab.ui_state}
+    message = {"type": "ui_state", "tab": tab.id, "session": tab.session,
+               "generation": tab.generation, "revision": tab.ui_revision, "state": tab.ui_state,
+               "grid_pending": dict(tab.grid_pending)}
+    # Linked values travel in the same message as the state that confirmed them,
+    # so viewers never render a selection without its readout.
+    if tab.ui_values_outbox["texts"] or tab.ui_values_outbox["displays"]:
+        message["values"] = tab.ui_values_outbox
+        tab.ui_values_outbox = {"texts": {}, "displays": {}}
+    return message
 
 
 async def config_ack(tab, force=True):
@@ -583,6 +629,10 @@ async def source_availability(tab, available, reason="", reset_queue=True):
     tab.source_available, tab.source_reason = available, reason
     if not available:
         tab.source_epoch = uuid.uuid4().hex
+        # The application may never see requests sent to a lost source.
+        if tab.grid_pending:
+            tab.grid_pending = {}
+            tab.ui_dirty = True
         # Detach before closing so concurrent sends cannot use a closed socket.
         if reset_queue and tab.ctrl_sock is not None:
             old, tab.ctrl_sock = tab.ctrl_sock, None
@@ -611,6 +661,15 @@ async def source_availability(tab, available, reason="", reset_queue=True):
     elif tab.session is not None:
         await config_ack(tab)
     await broadcast_tab(tab.id)
+
+
+def grid_request_allowed(tab, payload):
+    """Validate a browser grid request against declarations and cell overrides."""
+    cid, x, y = payload.get("id"), payload.get("x"), payload.get("y")
+    info = tab.control_registry.get(cid, {})
+    if info.get("type") != "grid_picker" or x not in info["x_options"] or y not in info["y_options"]:
+        return False
+    return control_allowed(tab, payload, {"grid_picker"}) and grid_cell(tab.ui_state, cid, x, y)["enabled"]
 
 
 def control_allowed(tab, payload, kind):
@@ -709,6 +768,8 @@ def parse_config(tab: Tab, json_config):
     tab.ui_state = initial_state
     tab.ui_revision = meta.get("revision", 0)
     tab.ui_dirty = False
+    tab.grid_pending = {}
+    tab.ui_values_outbox = {"texts": {}, "displays": {}}
     tab.source_epoch = uuid.uuid4().hex
     tab.traces_per_plot = traces_per_plot
     tab.trace_labels = trace_info
@@ -743,6 +804,9 @@ def parse_config(tab: Tab, json_config):
         if text_id in active_text_ids
     }
     tab.text_dirty = {text_id for text_id in tab.text_dirty if text_id in active_text_ids}
+    # A recovering server restores values the application linked to its selection.
+    apply_linked_values(tab, meta.get("values"), -1)
+    tab.ui_values_outbox = {"texts": {}, "displays": {}}
     tab.layout = layout
 
     num_traces = sum(traces_per_plot)
@@ -792,6 +856,7 @@ def build_config_message(tab: Tab, config_dict) -> dict:
         "generation": tab.generation,
         "ui_state": tab.ui_state,
         "ui_revision": tab.ui_revision,
+        "grid_pending": dict(tab.grid_pending),
         "source_available": tab.source_available,
         "source_reason": tab.source_reason,
     }
@@ -1098,7 +1163,7 @@ async def send_control_event(tab: Tab, event):
     """Forward a control event to the user's Python process, best-effort."""
     if tab.ctrl_sock is None:
         return
-    if event.get("type") in ("button", "slider", "text") and tab.session is not None:
+    if event.get("type") in ("button", "slider", "text", "grid") and tab.session is not None:
         event = {**event, "session": tab.session, "generation": tab.generation,
                  "source_epoch": tab.source_epoch}
     sock = tab.ctrl_sock
@@ -1643,6 +1708,7 @@ def _read_static_asset(name: str) -> str:
 _INDEX_HTML = _read_static_asset("index.html")
 for _asset in (
     "ui-view.js",
+    "grid-picker.js",
     "ui-view.css",
     "presentation.css",
     "uPlot.min.css",
@@ -1782,6 +1848,17 @@ async def handle_ws(request):
                         await send_control_event(
                             t, {"type": "text", "id": text_id, "value": value}
                         )
+                elif ptype == "control_grid":
+                    t = tabs.get(ws_tab.get(ws, BIND_ME_ID))
+                    if t is not None and grid_request_allowed(t, payload):
+                        # Requests are not selections: the cell stays pending until
+                        # the application confirms or rejects it via UI state.
+                        request_id = uuid.uuid4().hex
+                        gid, x, y = payload["id"], payload["x"], payload["y"]
+                        t.grid_pending[gid] = {"x": x, "y": y, "request_id": request_id}
+                        t.ui_dirty = True
+                        await send_control_event(t, {"type": "grid", "id": gid, "x": x, "y": y,
+                                                     "request_id": request_id})
             elif msg.type == WSMsgType.ERROR:
                 break
     finally:

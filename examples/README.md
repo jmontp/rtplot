@@ -67,4 +67,6 @@ Rerunning a script replaces that example's snapshot.
 
 Dropdown controls: [Dictionary](08_dropdown/run.py) · [Typed](08_dropdown/run_typed.py) · [API](../docs/dropdowns.md).
 
+Grid picker (controller bank): [Dictionary](10_grid_picker/run.py) · [Typed](10_grid_picker/run_typed.py) · [API](../docs/grid-picker.md).
+
 X/Y curves and FFT spectra: [Guide](09_xy_fft/README.md) · [Dictionary](09_xy_fft/run.py) · [Typed](09_xy_fft/run_typed.py).

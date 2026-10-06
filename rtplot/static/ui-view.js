@@ -125,7 +125,8 @@
       const busy = document.createElement('span'); busy.className = 'ctrl-busy'; busy.textContent = '◌ Working…'; busy.hidden = true;
       const selected = document.createElement('span'); selected.className = 'ctrl-selected'; selected.textContent = '✓ Selected'; selected.hidden = true;
       item.append(reason, busy, selected);
-      this.controls.set(id, {item, section, reason, busy, selected});
+      // Composite controls (grid pickers) re-apply their own parts after the generic sweep.
+      this.controls.set(id, {item, section, reason, busy, selected, update: item.rtplotUpdate});
       this.applyControl(id);
     }
     canInteract(id) {
@@ -143,12 +144,14 @@
       c.item.setAttribute('aria-busy', String(v.busy));
       c.reason.textContent = v.reason; c.reason.hidden = !v.reason; c.busy.hidden = !v.busy; c.selected.hidden = !v.selected;
       c.item.querySelectorAll('button,input,select,textarea,.ctrl-dial').forEach(el => {
+        if (el.classList.contains('grid-cell')) return;
         if ('disabled' in el) el.disabled = disabled;
         el.setAttribute('aria-disabled', String(disabled));
         if (v.reason) el.setAttribute('aria-describedby', c.reason.id); else el.removeAttribute('aria-describedby');
         if (el.classList.contains('ctrl-dial')) { el.setAttribute('tabindex', disabled ? '-1' : '0'); }
         if (el.classList.contains('ctrl-btn')) el.setAttribute('aria-pressed', String(v.selected));
       });
+      if (c.update) c.update(v, disabled, v.reason ? c.reason.id : null);
     }
     applySection(id) {
       const s = this.sections.get(id); if (!s) return;

@@ -2,17 +2,18 @@
 from copy import deepcopy
 
 META_KEY = "__rtplot_view__"
-CAPABILITIES = ["sections", "ui_state_v1", "presentation_v1", "dropdown_v1", "xy_v1"]
+CAPABILITIES = ["sections", "ui_state_v1", "presentation_v1", "dropdown_v1", "xy_v1", "grid_picker_v1"]
 CONTROL_DEFAULTS = {"enabled": True, "visible": True, "busy": False, "selected": False, "reason": ""}
+# Application-confirmed grid state rides in the same revisioned UI state as presentation.
+GRID_STATE_KEYS = {"value", "active", "cells", "message", "request"}
+GRID_CELL_DEFAULTS = {"enabled": True, "busy": False, "reason": "", "label": ""}
 SECTION_DEFAULTS = {"visible": True, "status": "idle", "message": ""}
 STATUSES = {"idle", "ready", "busy", "complete", "warning", "error"}
 
 
-def dropdown_options(control):
-    """Return validated (value, label) choices; values are always strings."""
-    options = control.get("options")
+def _choices(options, name, nonempty=False):
     if not isinstance(options, list) or not options:
-        raise ValueError("Dropdown options must be a non-empty list")
+        raise ValueError(f"{name} options must be a non-empty list")
     choices = []
     for option in options:
         if isinstance(option, str):
@@ -20,15 +21,81 @@ def dropdown_options(control):
         elif isinstance(option, dict):
             value, label = option.get("value"), option.get("label", option.get("value"))
         else:
-            raise ValueError("Dropdown options must be strings or value/label dictionaries")
-        if not isinstance(value, str) or not isinstance(label, str):
-            raise ValueError("Dropdown option values and labels must be strings")
+            raise ValueError(f"{name} options must be strings or value/label dictionaries")
+        if not isinstance(value, str) or not isinstance(label, str) or (nonempty and not value):
+            raise ValueError(f"{name} option values and labels must be strings"
+                             + (" (values non-empty)" if nonempty else ""))
         if value in [v for v, _ in choices]:
-            raise ValueError("Dropdown option values must be unique")
+            raise ValueError(f"{name} option values must be unique")
         choices.append((value, label))
+    return choices
+
+
+def dropdown_options(control):
+    """Return validated (value, label) choices; values are always strings."""
+    choices = _choices(control.get("options"), "Dropdown")
     if control.get("value", choices[0][0]) not in [v for v, _ in choices]:
         raise ValueError("Dropdown value must match an option")
     return choices
+
+
+def grid_declaration(control):
+    """Validate a grid picker and return its registry entry.
+
+    Option IDs are unique per axis; y_options[0] is the bottom row. An omitted
+    value confirms the first X and first Y option.
+    """
+    xs = [v for v, _ in _choices(control.get("x_options"), "Grid X", True)]
+    ys = [v for v, _ in _choices(control.get("y_options"), "Grid Y", True)]
+    for key in ("label", "x_label", "y_label"):
+        if not isinstance(control.get(key, ""), str):
+            raise ValueError(f"Grid {key} must be a string")
+    value = control.get("value", {"x": xs[0], "y": ys[0]})
+    if not isinstance(value, dict) or set(value) != {"x", "y"} or value["x"] not in xs or value["y"] not in ys:
+        raise ValueError("Grid value must be {'x': <declared X>, 'y': <declared Y>}")
+    if type(control.get("active", True)) is not bool:
+        raise ValueError("Grid active must be boolean")
+    return {"x_options": xs, "y_options": ys, "default": dict(value),
+            "active": control.get("active", True)}
+
+
+def grid_cells(cells, info):
+    """Validate per-cell overrides shaped {x_id: {y_id: {enabled, busy, reason, label}}}."""
+    if not isinstance(cells, dict):
+        raise ValueError("Grid cells must be a map of X IDs to Y maps")
+    for x, column in cells.items():
+        if x not in info["x_options"] or not isinstance(column, dict):
+            raise ValueError(f"Unknown grid X ID: {x}")
+        for y, cell in column.items():
+            if y not in info["y_options"]:
+                raise ValueError(f"Unknown grid Y ID: {y}")
+            if not isinstance(cell, dict) or set(cell) - set(GRID_CELL_DEFAULTS):
+                raise ValueError("Grid cells support only enabled, busy, reason and label")
+            for key, value in cell.items():
+                if type(value) is not type(GRID_CELL_DEFAULTS[key]):
+                    raise ValueError(f"Invalid type for grid cell {key}")
+                if isinstance(value, str) and len(value) > 4096:
+                    raise ValueError("Presentation strings must be at most 4096 characters")
+    return cells
+
+
+def grid_cell(state, cid, x, y):
+    """Merged per-cell override for a grid in a UI state snapshot."""
+    cells = state.get("controls", {}).get(cid, {}).get("cells", {})
+    return {**GRID_CELL_DEFAULTS, **cells.get(x, {}).get(y, {})}
+
+
+def _grid_property(key, value, info):
+    if key == "value":
+        if (not isinstance(value, dict) or set(value) != {"x", "y"}
+                or value["x"] not in info["x_options"] or value["y"] not in info["y_options"]):
+            raise ValueError("Grid value must name a declared X and Y")
+    elif key == "active" and type(value) is not bool:
+        raise ValueError("Grid active must be boolean")
+    elif key == "cells":
+        grid_cells(value, info)
+    elif key in ("message", "request") and (not isinstance(value, str) or len(value) > 4096):
+        raise ValueError(f"Grid {key} must be a string of at most 4096 characters")
 
 
 def declarations(config, view=None):
@@ -103,6 +170,8 @@ def declarations(config, view=None):
             controls[cid] = {"type": control.get("type"), "section": sid}
             if control.get("type") == "dropdown":
                 controls[cid]["options"] = [value for value, _ in dropdown_options(control)]
+            elif control.get("type") == "grid_picker":
+                controls[cid].update(grid_declaration(control))
             if row.get("exclusive"):
                 controls[cid]["exclusive_group"] = key
     essentials = view.get("essential_controls", [])
@@ -147,12 +216,18 @@ def merge_state(current, patch, controls, view):
             if values is None:
                 target.pop(ident, None)
                 continue
-            if not isinstance(values, dict) or set(values) - set(defaults):
+            grid = controls[ident] if group == "controls" and controls[ident].get("type") == "grid_picker" else None
+            allowed = set(defaults) | (GRID_STATE_KEYS if grid else set())
+            if not isinstance(values, dict) or set(values) - allowed:
                 raise ValueError(f"Unsupported properties for {group}.{ident}")
             merged = dict(target.get(ident, {}))
             for key, value in values.items():
                 if value is None:
                     merged.pop(key, None)
+                    continue
+                if key in GRID_STATE_KEYS:
+                    _grid_property(key, value, grid)
+                    merged[key] = deepcopy(value)
                     continue
                 if type(value) is not type(defaults[key]):
                     raise ValueError(f"Invalid type for {group}.{ident}.{key}")

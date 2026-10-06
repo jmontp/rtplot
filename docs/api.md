@@ -16,7 +16,7 @@ schema, the browser UI, and the `rtplot-server` CLI.
 - [Sending data](#sending-data)
 - [Interactive controls](#interactive-controls)
 - [Dropdown controls](dropdowns.md)
-- [Proposed grid picker requirements](grid-picker-requirements.html) (not implemented)
+- [Grid picker controls](grid-picker.md) · [requirements](grid-picker-requirements.html)
 - [Static HTML snapshots](#static-html-snapshots)
 - [Browser UI features](#browser-ui-features)
 - [CLI reference](#cli-reference)
@@ -38,8 +38,12 @@ All from `rtplot.client`:
 | `send_array(A)` | Push samples: float, list, 1-D or 2-D `(num_traces, N)` numpy. |
 | `send_xy(plot_id, x, y)` | Replace one X/Y plot with numeric coordinates and one or more traces. |
 | `set_dropdown(id, value)` | Select a declared dropdown option; see [dropdowns](dropdowns.md). |
+| `set_grid_picker(id, x, y, ...)` | Confirm a grid selection with linked values, atomically; see [grid pickers](grid-picker.md). |
+| `reject_grid_request(id, request_id, reason)` | Resolve a grid request without changing the confirmed selection. |
+| `grid_selection(id)` | Confirmed `(x, y, active)` for a grid picker. |
+| `server_capabilities()` | Capabilities the browser server acknowledged at initialization. |
 | `set_display(id, value)` | Update a `display` (numeric) or `text` (string) element. |
-| `poll_controls()` | Drain the return channel; returns `ControlState(values, buttons)`. |
+| `poll_controls()` | Drain the return channel; returns `ControlState(values, buttons)` plus a `grid_requests` attribute. |
 | `save_snapshot(path, server_url=None, animate=False)` | Download a self-contained HTML snapshot to `path`. |
 
 ---

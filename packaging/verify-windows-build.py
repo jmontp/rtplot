@@ -19,7 +19,7 @@ for module in ('rtplot.client','rtplot.server_browser','rtplot.ui_state','rtplot
  results[module]=actual==expected
  if not results[module]: raise RuntimeError('Packaged module differs: '+module)
 assets={}
-for relative in ('rtplot/static/index.html','rtplot/static/ui-view.js','rtplot/static/presentation.css','rtplot/static/uPlot.iife.min.js','rtplot/static/uPlot.min.css'):
+for relative in ('rtplot/static/index.html','rtplot/static/ui-view.js','rtplot/static/grid-picker.js','rtplot/static/presentation.css','rtplot/static/uPlot.iife.min.js','rtplot/static/uPlot.min.css'):
  key=next(k for k in archive.toc if k.replace('\\','/')==relative)
  actual=archive.extract(key)
  expected=(build/'source'/relative).read_bytes()
