@@ -2,7 +2,7 @@
 from copy import deepcopy
 
 META_KEY = "__rtplot_view__"
-CAPABILITIES = ["sections", "ui_state_v1", "presentation_v1", "dropdown_v1", "xy_v1", "grid_picker_v1", "checkbox_v1"]
+CAPABILITIES = ["sections", "ui_state_v1", "presentation_v1", "dropdown_v1", "dropdown_filter_v1", "xy_v1", "grid_picker_v1", "checkbox_v1"]
 CONTROL_DEFAULTS = {"enabled": True, "visible": True, "busy": False, "selected": False, "reason": ""}
 # Application-confirmed grid state rides in the same revisioned UI state as presentation.
 GRID_STATE_KEYS = {"value", "active", "cells", "message", "request"}
@@ -217,13 +217,20 @@ def merge_state(current, patch, controls, view):
                 target.pop(ident, None)
                 continue
             grid = controls[ident] if group == "controls" and controls[ident].get("type") == "grid_picker" else None
-            allowed = set(defaults) | (GRID_STATE_KEYS if grid else set())
+            dropdown = controls[ident] if group == "controls" and controls[ident].get("type") == "dropdown" else None
+            allowed = set(defaults) | (GRID_STATE_KEYS if grid else set()) | ({"visible_options"} if dropdown else set())
             if not isinstance(values, dict) or set(values) - allowed:
                 raise ValueError(f"Unsupported properties for {group}.{ident}")
             merged = dict(target.get(ident, {}))
             for key, value in values.items():
                 if value is None:
                     merged.pop(key, None)
+                    continue
+                if key == "visible_options":
+                    if (not isinstance(value, list) or any(not isinstance(v, str) or v not in dropdown['options'] for v in value)
+                            or len(set(value)) != len(value)):
+                        raise ValueError("visible_options must be a unique subset of declared dropdown values")
+                    merged[key] = list(value)
                     continue
                 if key in GRID_STATE_KEYS:
                     _grid_property(key, value, grid)

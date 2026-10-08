@@ -205,6 +205,7 @@
   <script src="/static/uPlot.iife.min.js"></script>
   <script src="/static/ui-view.js"></script>
   <script src="/static/grid-picker.js"></script>
+  <script src="/static/dropdown-filter.js"></script>
   <script src="/static/katex/katex.min.js"></script>
   <script src="/static/katex/auto-render.min.js"></script>
   <script>
@@ -775,7 +776,23 @@
             if (sendCtrl({type: 'control_text', id: el.id, value: select.value})) committed = select.value;
             else select.value = committed;
           });
-          select.setServerValue = value => { select.value = value; committed = value; };
+          const allChoices = Array.from(select.options, o => ({value: o.value, label: o.textContent}));
+          let visibleOptions = null;
+          const renderChoices = () => {
+            const choices = rtplotFilterDropdownChoices(allChoices, visibleOptions, committed);
+            // Avoid replacing focused options on every sample/update.
+            const before = Array.from(select.options, o => [o.value, o.textContent]);
+            const after = choices.map(o => [o.value, o.label]);
+            if (JSON.stringify(before) !== JSON.stringify(after)) {
+              select.replaceChildren(...choices.map(c => {
+                const option = document.createElement('option');
+                option.value = c.value; option.textContent = c.label; return option;
+              }));
+            }
+            select.value = committed;
+          };
+          select.setServerValue = value => { committed = value; renderChoices(); };
+          item.rtplotUpdate = state => { visibleOptions = state.visible_options ?? null; renderChoices(); };
           label.appendChild(select);
           item.appendChild(label);
           controlElements.textInputs[el.id] = select;

@@ -42,3 +42,16 @@ def test_invalid_state_rejected_atomically(declared, patch):
 def test_invalid_sections(view, rows):
     with pytest.raises(ValueError):
         declarations(rows, view)
+
+
+def test_dropdown_visible_options_are_a_presentation_subset_and_can_reset():
+    view, controls = declarations({'c': {'controls': [dict(type='dropdown', id='model', options=['a', 'b'])]}})
+    original = {'controls': {}, 'sections': {}}
+    one = merge_state(original, {'controls': {'model': {'visible_options': ['b']}}}, controls, view)
+    assert controls['model']['options'] == ['a', 'b']
+    assert one['controls']['model']['visible_options'] == ['b']
+    assert merge_state(one, {'controls': {'model': {'visible_options': None}}}, controls, view)['controls'] == {}
+    for values in [['unknown'], ['b', 'b'], 'b', [1]]:
+        with pytest.raises(ValueError):
+            merge_state(original, {'controls': {'model': {'visible_options': values}}}, controls, view)
+    assert merge_state(original, {'controls': {'model': {'visible_options': []}}}, controls, view)['controls']['model']['visible_options'] == []

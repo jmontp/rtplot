@@ -1021,6 +1021,13 @@ def set_dropdown(control_id: str, value: str):
     socket.send_json({"id": control_id, "value": value, "session": _session, "generation": _generation})
 
 
+def set_dropdown_filter(control_id: str, visible_options=None):
+    """Filter displayed declared options, preserving selection; None restores all."""
+    if "dropdown_filter_v1" not in _server_capabilities:
+        raise RuntimeError("Dropdown filtering requires an updated rtplot browser server")
+    return set_ui_state({"controls": {control_id: {"visible_options": visible_options}}})
+
+
 def poll_controls():
     """Drain the return channel non-blocking and return current control state.
 
